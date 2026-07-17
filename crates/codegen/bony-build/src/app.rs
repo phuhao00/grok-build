@@ -1420,33 +1420,7 @@ impl BonyBuildApp {
         });
 
         if self.model.needs_login {
-            ui.add_space(20.0);
-            Frame::new()
-                .fill(PANEL)
-                .corner_radius(CornerRadius::same(14))
-                .stroke(Stroke::new(1.0, BORDER))
-                .inner_margin(Margin::symmetric(18, 16))
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(&self.model.login_message)
-                            .size(13.5)
-                            .color(MUTED),
-                    );
-                    ui.add_space(12.0);
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("浏览器登录").color(BG).strong(),
-                            )
-                            .fill(ACCENT)
-                            .corner_radius(CornerRadius::same(10))
-                            .min_size(Vec2::new(160.0, 36.0)),
-                        )
-                        .clicked()
-                    {
-                        self.send_cmd(UiCommand::Login);
-                    }
-                });
+            // Login lives in the sidebar bottom-left — keep the hero clean.
             return;
         }
 
@@ -1526,18 +1500,24 @@ impl BonyBuildApp {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal_top(|ui| {
-                            let height = ui.available_height().max(40.0);
-                            let (rect, _) = ui.allocate_exact_size(
-                                Vec2::new(3.0, height.min(80.0)),
+                            let (bar, _) = ui.allocate_exact_size(
+                                Vec2::new(3.0, 28.0),
                                 egui::Sense::hover(),
                             );
                             ui.painter()
-                                .rect_filled(rect, CornerRadius::same(2), ACCENT_BAR);
+                                .rect_filled(bar, CornerRadius::same(2), ACCENT_BAR);
                             ui.add_space(10.0);
-                            ui.vertical(|ui| {
-                                ui.set_width(ui.available_width());
-                                markdown::render(ui, &msg.text, TEXT);
-                            });
+                            // Pin an explicit content width so wrapped inline code
+                            // never collapses to a 1-glyph column.
+                            let content_w = ui.available_width().max(40.0);
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(content_w, 0.0),
+                                egui::Layout::top_down(egui::Align::LEFT),
+                                |ui| {
+                                    ui.set_width(content_w);
+                                    markdown::render(ui, &msg.text, TEXT);
+                                },
+                            );
                         });
                     });
                 if let Some(u) = &msg.turn_usage {

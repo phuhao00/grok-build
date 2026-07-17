@@ -1,0 +1,311 @@
+# Curated product features for bony-monitor (hot-reloaded at runtime).
+
+[[features]]
+id = "chat"
+name = "对话交互"
+category = "桌面体验"
+description = "消息发送、流式回复、时间线、悬浮输入框"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/app.rs",
+  "crates/codegen/bony-build/src/model.rs",
+  "crates/codegen/bony-build/src/markdown.rs",
+  "crates/codegen/bony-build/src/events.rs",
+]
+names = ["markdown.rs", "events.rs"]
+keywords = ["chat", "composer", "timeline", "对话", "发送", "floating_composer", "enter"]
+severity = "high"
+user_impact = "直接影响用户如何提问与阅读回复"
+
+[[features]]
+id = "desktop-shell"
+name = "桌面壳 / 导航入口"
+category = "桌面体验"
+description = "Codex 式顶栏、侧栏导航、MainNav 占位入口、左右栏开关"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/app.rs",
+  "crates/codegen/bony-build/src/main.rs",
+  "crates/codegen/bony-build/src/model.rs",
+]
+names = ["main.rs"]
+keywords = [
+  "title_bar", "sidebar", "mainnav", "codex", "侧栏", "顶栏", "入口",
+  "win_chrome", "nav_chevron", "show_left_sidebar", "show_right_panel", "decorations",
+]
+severity = "high"
+user_impact = "影响窗口铬、导航入口与左右栏是否清晰可用"
+
+[[features]]
+id = "projects"
+name = "项目 / 工作目录"
+category = "桌面体验"
+description = "最近项目列表、选文件夹、切换 cwd 并重启 agent"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/usage.rs",
+  "crates/codegen/bony-build/src/app.rs",
+  "crates/codegen/bony-build/src/model.rs",
+]
+names = ["usage.rs"]
+keywords = [
+  "project", "projects.json", "switch_project", "pick_project", "recent_projects",
+  "rfd", "工作目录", "打开项目",
+]
+severity = "high"
+user_impact = "用户能否切换工作区并让 Agent 在正确目录运行"
+
+[[features]]
+id = "usage-analytics"
+name = "使用统计 / Token 图表"
+category = "桌面体验"
+description = "轮次用量、折线/柱状图、使用统计面板"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/usage.rs",
+  "crates/codegen/bony-build/src/charts.rs",
+  "crates/codegen/bony-build/src/app.rs",
+]
+names = ["charts.rs", "usage.rs"]
+keywords = ["token", "usage", "chart", "egui_plot", "使用统计", "turns.jsonl", "usage_tab"]
+severity = "medium"
+user_impact = "用户能否看清 token 消耗趋势与轮次明细"
+
+[[features]]
+id = "task-history"
+name = "任务列表 / 历史回看"
+category = "桌面体验"
+description = "新建任务、侧栏任务列表、只读历史会话"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/model.rs",
+  "crates/codegen/bony-build/src/app.rs",
+  "crates/codegen/bony-build/src/usage.rs",
+]
+names = ["model.rs"]
+keywords = [
+  "new_task", "viewing_session", "task_summary", "load_task_view", "任务", "历史", "aggregate_tasks",
+]
+severity = "medium"
+user_impact = "用户能否回看历史任务并开启新任务"
+
+[[features]]
+id = "ui-layout"
+name = "界面布局 / 可读性"
+category = "桌面体验"
+description = "布局、对齐、字体、主题、空状态、图标绘制"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/fonts.rs",
+  "crates/codegen/bony-build/src/app.rs",
+  "crates/codegen/bony-build/src/charts.rs",
+]
+names = ["fonts.rs"]
+keywords = ["layout", "font", "cjk", "中文", "乱码", "遮挡", "vector", "icon"]
+severity = "medium"
+user_impact = "影响界面是否易读、控件图标是否清晰、中文是否正常"
+
+[[features]]
+id = "model-picker"
+name = "模型切换"
+category = "桌面体验"
+description = "会话模型选择、默认模型持久化"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/config_io.rs",
+  "crates/codegen/bony-build/src/app.rs",
+  "crates/codegen/bony-build/src/agent_bridge.rs",
+  "crates/codegen/bony-build/src/model.rs",
+]
+names = ["config_io.rs"]
+keywords = [
+  "model", "set_session_model", "setmodel", "model_picker", "模型", "qwen", "kimi", "glm",
+]
+severity = "high"
+user_impact = "用户能否切换 Kimi/Qwen/智谱等模型并记住默认"
+
+[[features]]
+id = "auth-login"
+name = "登录 / 认证"
+category = "安全与接入"
+description = "浏览器登录、API Key、BYOK 门闸"
+user_facing = true
+paths = [
+  "crates/codegen/xai-grok-auth/",
+  "crates/codegen/xai-grok-secrets/",
+  "crates/codegen/bony-build/src/agent_bridge.rs",
+]
+names = ["auth", "login", "secret"]
+keywords = ["login", "auth", "api_key", "登录", "sign in", "byok"]
+severity = "critical"
+user_impact = "决定能否开始对话；凭证错误会阻断全部能力"
+
+[[features]]
+id = "multi-provider"
+name = "多 LLM 供应商"
+category = "模型能力"
+description = "OpenAI 兼容 / Anthropic / 自定义 base_url"
+user_facing = true
+paths = [
+  "crates/codegen/xai-grok-sampler/",
+  "crates/codegen/xai-grok-sampling-types/",
+  "crates/codegen/xai-grok-models/",
+  "crates/codegen/xai-grok-config/",
+]
+names = ["sampling", "model"]
+keywords = ["provider", "base_url", "dashscope", "moonshot", "zhipu", "供应商"]
+severity = "high"
+user_impact = "影响可用模型目录、请求协议与出站鉴权方式"
+
+[[features]]
+id = "tools"
+name = "工具执行"
+category = "Agent 能力"
+description = "终端、文件编辑、搜索等 tool calls"
+user_facing = true
+paths = [
+  "crates/codegen/xai-grok-tools/",
+  "crates/codegen/xai-tool-runtime/",
+  "crates/codegen/xai-tool-protocol/",
+]
+names = ["tool"]
+keywords = ["tool", "shell", "edit", "工具"]
+severity = "high"
+user_impact = "Agent 能否真正改文件、跑命令、探索代码库"
+
+[[features]]
+id = "permissions"
+name = "权限审批"
+category = "安全与接入"
+description = "工具权限弹窗、自动批准策略"
+user_facing = true
+paths = ["crates/codegen/bony-build/src/app.rs", "crates/codegen/xai-grok-workspace/"]
+names = ["permission"]
+keywords = ["permission", "approve", "yolo", "权限", "批准"]
+severity = "high"
+user_impact = "影响危险操作是否需确认，关系到安全与流畅度"
+
+[[features]]
+id = "session-loop"
+name = "会话循环 / ACP"
+category = "Agent 能力"
+description = "prompt 循环、取消、stdio ACP 桥接"
+user_facing = true
+paths = [
+  "crates/codegen/xai-grok-shell/",
+  "crates/codegen/xai-acp-lib/",
+  "crates/codegen/bony-build/src/agent_bridge.rs",
+  "crates/codegen/xai-chat-state/",
+]
+names = ["agent_bridge", "session", "acp"]
+keywords = ["session", "acp", "prompt", "cancel", "会话"]
+severity = "critical"
+user_impact = "核心链路；异常会导致无法对话或中途卡住"
+
+[[features]]
+id = "workspace-fs"
+name = "工作区 / 文件系统"
+category = "Agent 能力"
+description = "cwd、读写、checkpoint、沙箱"
+user_facing = true
+paths = [
+  "crates/codegen/xai-grok-workspace/",
+  "crates/codegen/xai-grok-sandbox/",
+  "crates/codegen/xai-file-utils/",
+]
+names = ["workspace", "sandbox", "checkpoint"]
+keywords = ["workspace", "cwd", "sandbox", "工作区"]
+severity = "high"
+user_impact = "决定 Agent 能在哪些目录操作、是否可回滚"
+
+[[features]]
+id = "memory"
+name = "记忆 / 压缩"
+category = "Agent 能力"
+description = "长期记忆、上下文 compact"
+user_facing = false
+paths = ["crates/codegen/xai-grok-memory/", "crates/codegen/xai-grok-compaction/"]
+names = ["memory", "compact"]
+keywords = ["memory", "compaction", "记忆", "压缩"]
+severity = "medium"
+user_impact = "长会话是否丢上下文、跨会话是否记得偏好"
+
+[[features]]
+id = "subagent"
+name = "子 Agent"
+category = "Agent 能力"
+description = "并行子任务与覆盖解析"
+user_facing = false
+paths = ["crates/codegen/xai-grok-subagent-resolution/"]
+names = ["subagent"]
+keywords = ["subagent", "子 agent"]
+severity = "medium"
+user_impact = "复杂任务拆分与并行执行能力"
+
+[[features]]
+id = "tui"
+name = "终端 TUI"
+category = "终端体验"
+description = "官方 grok 全屏终端界面"
+user_facing = true
+paths = [
+  "crates/codegen/xai-grok-pager/",
+  "crates/codegen/xai-grok-pager-bin/",
+  "crates/codegen/xai-grok-pager-render/",
+]
+names = ["pager"]
+keywords = ["tui", "pager", "终端"]
+severity = "medium"
+user_impact = "不用桌面时，终端体验是否可用"
+
+[[features]]
+id = "monitor"
+name = "Web 监控看板"
+category = "可观测性"
+description = "架构总览与改动影响展示"
+user_facing = true
+paths = ["crates/codegen/bony-monitor/", "scripts/run-monitor.ps1"]
+names = ["bony-monitor", "run-monitor"]
+keywords = ["monitor", "监控", "impact", "catalog", "热更新"]
+severity = "medium"
+user_impact = "团队能否看清架构与每次改动的功能影响"
+
+[[features]]
+id = "docs-product"
+name = "产品文档"
+category = "文档"
+description = "README、架构说明、截图"
+user_facing = true
+paths = ["README.md", "ARCHITECTURE.md", "docs/"]
+names = ["README", "ARCHITECTURE"]
+keywords = ["readme", "docs", "文档"]
+severity = "low"
+user_impact = "新用户能否快速理解并上手项目"
+
+[[features]]
+id = "build-ci"
+name = "构建 / 依赖"
+category = "工程"
+description = "Cargo workspace、脚本、toolchain"
+user_facing = false
+paths = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "scripts/"]
+names = ["Cargo.toml", "Cargo.lock"]
+keywords = ["cargo", "build", "依赖", "workspace"]
+severity = "medium"
+user_impact = "影响能否编译运行；间接阻塞所有功能交付"
+
+[[features]]
+id = "mcp-hooks"
+name = "MCP / Hooks / 插件"
+category = "扩展"
+description = "外部工具协议与钩子"
+user_facing = false
+paths = [
+  "crates/codegen/xai-grok-mcp/",
+  "crates/codegen/xai-grok-hooks/",
+  "crates/codegen/xai-grok-plugin-marketplace/",
+]
+names = ["mcp", "hook", "plugin"]
+keywords = ["mcp", "hook", "plugin", "插件"]
+severity = "medium"
+user_impact = "扩展能力与第三方集成是否可用"

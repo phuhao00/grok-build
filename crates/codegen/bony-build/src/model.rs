@@ -133,12 +133,31 @@ impl AppModel {
     pub fn new(initial_cwd: PathBuf) -> Self {
         let mut recent = load_recent_projects();
         remember_project(&mut recent, &initial_cwd);
+        let catalog = crate::config_io::load_models_catalog();
+        let (current_model_id, current_model_name) = catalog
+            .default_id
+            .as_ref()
+            .and_then(|id| {
+                catalog
+                    .models
+                    .iter()
+                    .find(|m| &m.id == id)
+                    .map(|m| (m.id.clone(), m.name.clone()))
+            })
+            .or_else(|| {
+                catalog
+                    .models
+                    .first()
+                    .map(|m| (m.id.clone(), m.name.clone()))
+            })
+            .unwrap_or_else(|| (String::new(), "model".into()));
         Self {
             status: "Connecting…".into(),
             auto_scroll: true,
             login_message: "Sign in to chat with Bony Build.".into(),
-            current_model_id: String::new(),
-            current_model_name: "model".into(),
+            current_model_id,
+            current_model_name,
+            available_models: catalog.models,
             task_title: "新任务".into(),
             display_name: default_display_name(),
             history_turns: load_recent_turns(80),

@@ -295,10 +295,7 @@ function closeDrawer() {
   document.getElementById("backdrop").classList.add("hidden");
 }
 
-async function boot() {
-  document.getElementById("drawer-close").addEventListener("click", closeDrawer);
-  document.getElementById("backdrop").addEventListener("click", closeDrawer);
-
+async function refreshAll({ silent } = { silent: false }) {
   const [overview, arch, changes, features] = await Promise.all([
     fetchJson("/api/overview"),
     fetchJson("/api/architecture"),
@@ -313,6 +310,31 @@ async function boot() {
   renderArchitecture(arch);
   renderFilters();
   renderTimeline();
+
+  const el = document.getElementById("refresh-meta");
+  if (el) {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const mods = overview.desktop_modules ?? overview.discovered_modules ?? "-";
+    el.textContent = silent
+      ? `已自动刷新 · ${hh}:${mm}:${ss} · 桌面模块 ${mods}`
+      : `已加载 · ${hh}:${mm}:${ss} · 桌面模块 ${mods}`;
+  }
+}
+
+async function boot() {
+  document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+  document.getElementById("backdrop").addEventListener("click", closeDrawer);
+
+  await refreshAll({ silent: false });
+  setInterval(() => {
+    refreshAll({ silent: true }).catch((err) => {
+      const el = document.getElementById("refresh-meta");
+      if (el) el.textContent = `刷新失败：${err.message}`;
+    });
+  }, 12000);
 }
 
 boot().catch((err) => {

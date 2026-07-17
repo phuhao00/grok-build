@@ -1,6 +1,8 @@
-//! Static architecture overview for the dashboard.
+//! Architecture overview for the dashboard (refreshed with discovered modules).
 
 use serde::Serialize;
+
+use crate::catalog::CatalogSnapshot;
 
 #[derive(Debug, Serialize)]
 pub struct ArchLayer {
@@ -26,20 +28,36 @@ pub struct ArchitectureOverview {
     pub flows: Vec<String>,
 }
 
-pub fn overview() -> ArchitectureOverview {
+pub fn overview(catalog: &CatalogSnapshot) -> ArchitectureOverview {
+    let mut host_crates = vec![
+        "bony-build".into(),
+        "bony-monitor".into(),
+        "xai-grok-pager*".into(),
+    ];
+    if catalog.desktop_module_count > 0 {
+        host_crates.push(format!("bony-build src ×{}", catalog.desktop_module_count));
+    }
+    for d in catalog
+        .discovered
+        .iter()
+        .filter(|d| d.crate_name == "bony-build")
+        .take(8)
+    {
+        host_crates.push(format!("· {}", d.stem));
+    }
+
     ArchitectureOverview {
         title: "Bony Build 架构".into(),
-        blurb: "桌面壳经 ACP 驱动 grok agent stdio；SessionActor 负责采样→工具→再采样循环。".into(),
+        blurb: "Codex 式桌面壳经 ACP 驱动 grok agent stdio；目录与模块扫描会随工作区热更新。".into(),
         layers: vec![
             ArchLayer {
                 id: "host".into(),
                 name: "1 · Host / 客户端".into(),
-                summary: "用户入口：Bony Build 桌面、TUI、或任意 ACP 客户端".into(),
-                crates: vec![
-                    "bony-build".into(),
-                    "bony-monitor".into(),
-                    "xai-grok-pager*".into(),
-                ],
+                summary: format!(
+                    "Bony Build 桌面（顶栏/侧栏/项目/用量图）、TUI、或任意 ACP 客户端；当前扫描到 {} 个桌面模块",
+                    catalog.desktop_module_count
+                ),
+                crates: host_crates,
             },
             ArchLayer {
                 id: "session".into(),
@@ -97,7 +115,9 @@ pub fn overview() -> ArchitectureOverview {
             "用户在 Bony Build 输入任务 → ACP prompt → SessionActor".into(),
             "Sampler 请求当前模型（如 qwen-max）→ 流式文本 / tool calls".into(),
             "ToolBridge 执行工具 → 结果回灌 → 继续采样直到结束".into(),
-            "bony-monitor 读取 git 历史，按路径规则生成影响摘要".into(),
+            "轮次结束写入 ~/.bony-build/turns.jsonl；使用统计面板展示折线/柱状趋势".into(),
+            "切换项目 → Shutdown 旧 bridge → 新 cwd 重连 agent".into(),
+            "bony-monitor 热重载 features.toml / 扫描模块，并按规则生成影响摘要".into(),
         ],
     }
 }

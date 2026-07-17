@@ -271,6 +271,13 @@ async fn run_session(
         config.grok_bin.display()
     )));
 
+    // Bring User/Machine `env_key` values into this process so the child agent
+    // can advertise `xai.api_key` for config.toml BYOK models (e.g. Qwen).
+    let hydrated = crate::config_io::hydrate_model_env_keys();
+    if hydrated > 0 {
+        tracing::info!(hydrated, "injected model env_keys before agent spawn");
+    }
+
     let mut child = match tokio::process::Command::new(&config.grok_bin)
         .args(["agent", "stdio"])
         .current_dir(&config.cwd)
@@ -385,16 +392,18 @@ async fn run_session(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let has_local_creds = std::path::Path::new(&std::env::var_os("USERPROFILE").unwrap_or_default())
+    let has_xai_creds = std::path::Path::new(&std::env::var_os("USERPROFILE").unwrap_or_default())
         .join(".grok")
         .join("auth.json")
         .is_file()
         || std::env::var_os("XAI_API_KEY").is_some()
         || std::env::var_os("GROK_CODE_XAI_API_KEY").is_some();
+    let has_byok = crate::config_io::has_usable_model_credentials();
+    let has_noninteractive_auth = method_ids
+        .iter()
+        .any(|id| id == "cached_token" || id == "xai.api_key");
 
-    if !has_local_creds
-        && !method_ids.iter().any(|id| id == "cached_token" || id == "xai.api_key")
-    {
+    if !has_xai_creds && !has_byok && !has_noninteractive_auth {
         let _ = child.kill().await;
         emit(AgentEvent::NeedsLogin {
             message: "Sign in, or configure any LLM in ~/.grok/config.toml ([model.*] + api_key/env_key) and restart.".into(),
@@ -418,42 +427,61 @@ async fn run_session(
         return SessionEnd::Shutdown;
     }
 
-    if let Some(method) = select_auth_method(&init.auth_methods, default_id.as_deref()) {
+    if let Some(method) =
+        select_auth_method(&init.auth_methods, default_id.as_deref(), has_byok)
+    {
         let id = method.id().0.to_string();
-        emit(AgentEvent::Status(format!("Signing in ({id})…")));
-        let mut req = acp::AuthenticateRequest::new(method.id().clone());
-        // Interactive browser methods must NOT be headless.
-        if id != "grok.com" && !id.contains("oidc") {
-            req = req.meta(serde_json::json!({ "headless": true }).as_object().cloned());
-        }
-        if let Err(e) = conn.authenticate(req).await {
-            let _ = child.kill().await;
-            emit(AgentEvent::NeedsLogin {
-                message: format!("Sign-in failed: {e}. Click Sign in to open the browser."),
-            });
-            while let Some(cmd) = cmd_rx.recv().await {
-                match cmd {
-                    UiCommand::Shutdown => return SessionEnd::Shutdown,
-                    UiCommand::Login => {
-                        run_grok_login(config, event_tx, egui_ctx).await;
-                        return SessionEnd::Reconnect;
+        // Don't force browser login when config.toml BYOK models are ready.
+        let interactive = id == "grok.com" || id.contains("oidc");
+        if !(interactive && has_byok && !has_xai_creds) {
+            emit(AgentEvent::Status(format!("Signing in ({id})…")));
+            let mut req = acp::AuthenticateRequest::new(method.id().clone());
+            if !interactive {
+                req = req.meta(serde_json::json!({ "headless": true }).as_object().cloned());
+            }
+            if let Err(e) = conn.authenticate(req).await {
+                if has_byok {
+                    tracing::warn!(error = %e, "auth failed; continuing with config.toml models");
+                } else {
+                    let _ = child.kill().await;
+                    emit(AgentEvent::NeedsLogin {
+                        message: format!("Sign-in failed: {e}. Click Sign in to open the browser."),
+                    });
+                    while let Some(cmd) = cmd_rx.recv().await {
+                        match cmd {
+                            UiCommand::Shutdown => return SessionEnd::Shutdown,
+                            UiCommand::Login => {
+                                run_grok_login(config, event_tx, egui_ctx).await;
+                                return SessionEnd::Reconnect;
+                            }
+                            UiCommand::Prompt(_) => {
+                                emit(AgentEvent::NeedsLogin {
+                                    message: "Please sign in first.".into(),
+                                });
+                            }
+                            _ => {}
+                        }
                     }
-                    UiCommand::Prompt(_) => {
-                        emit(AgentEvent::NeedsLogin {
-                            message: "Please sign in first.".into(),
-                        });
-                    }
-                    _ => {}
+                    return SessionEnd::Shutdown;
                 }
             }
-            return SessionEnd::Shutdown;
+        } else {
+            tracing::info!("skipping interactive login; using config.toml model credentials");
+            emit(AgentEvent::Status("Using config.toml models…".into()));
         }
     }
 
     emit(AgentEvent::Status("Opening session…".into()));
-    let session = match conn
-        .new_session(acp::NewSessionRequest::new(config.cwd.clone()).mcp_servers(vec![]))
-        .await
+    let catalog = crate::config_io::load_models_catalog();
+    let mut session_req = acp::NewSessionRequest::new(config.cwd.clone()).mcp_servers(vec![]);
+    if let Some(model_id) = catalog.default_id.as_ref() {
+        session_req = session_req.meta(
+            serde_json::json!({ "modelId": model_id })
+                .as_object()
+                .cloned(),
+        );
+    }
+    let session = match conn.new_session(session_req).await
     {
         Ok(s) => s,
         Err(e) => {
@@ -609,6 +637,7 @@ async fn run_grok_login(
 fn select_auth_method<'a>(
     methods: &'a [acp::AuthMethod],
     default_id: Option<&str>,
+    prefer_byok: bool,
 ) -> Option<&'a acp::AuthMethod> {
     if methods.is_empty() {
         return None;
@@ -616,13 +645,26 @@ fn select_auth_method<'a>(
     if let Some(id) = default_id
         && let Some(m) = methods.iter().find(|m| m.id().0.as_ref() == id)
     {
-        return Some(m);
+        // When BYOK models are configured, don't honor a grok.com default.
+        let id = m.id().0.as_ref();
+        if !(prefer_byok && (id == "grok.com" || id.contains("oidc"))) {
+            return Some(m);
+        }
+    }
+    let noninteractive = methods
+        .iter()
+        .find(|m| m.id().0.as_ref() == "xai.api_key")
+        .or_else(|| methods.iter().find(|m| m.id().0.as_ref() == "cached_token"));
+    if noninteractive.is_some() {
+        return noninteractive;
+    }
+    if prefer_byok {
+        // Caller will skip interactive login and open a BYOK session.
+        return None;
     }
     methods
         .iter()
-        .find(|m| m.id().0.as_ref() == "cached_token")
-        .or_else(|| methods.iter().find(|m| m.id().0.as_ref() == "xai.api_key"))
-        .or_else(|| methods.iter().find(|m| m.id().0.as_ref() == "grok.com"))
+        .find(|m| m.id().0.as_ref() == "grok.com")
         .or_else(|| methods.first())
 }
 

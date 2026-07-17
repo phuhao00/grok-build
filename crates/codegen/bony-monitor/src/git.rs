@@ -6,6 +6,7 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
+use crate::catalog::CatalogSnapshot;
 use crate::impact::{analyze, ChangeImpact};
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,7 +43,11 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
-pub fn list_changes(repo: &Path, limit: usize) -> Result<Vec<ChangeEntry>> {
+pub fn list_changes(
+    repo: &Path,
+    limit: usize,
+    catalog: &CatalogSnapshot,
+) -> Result<Vec<ChangeEntry>> {
     let output = Command::new("git")
         .args([
             "-C",
@@ -65,17 +70,21 @@ pub fn list_changes(repo: &Path, limit: usize) -> Result<Vec<ChangeEntry>> {
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
-    parse_git_log(&text)
+    parse_git_log(&text, catalog)
 }
 
-pub fn change_detail(repo: &Path, sha: &str) -> Result<ChangeEntry> {
-    let list = list_changes(repo, 200)?;
+pub fn change_detail(
+    repo: &Path,
+    sha: &str,
+    catalog: &CatalogSnapshot,
+) -> Result<ChangeEntry> {
+    let list = list_changes(repo, 200, catalog)?;
     list.into_iter()
         .find(|c| c.sha.starts_with(sha) || c.short_sha == sha)
         .with_context(|| format!("commit not found: {sha}"))
 }
 
-fn parse_git_log(text: &str) -> Result<Vec<ChangeEntry>> {
+fn parse_git_log(text: &str, catalog: &CatalogSnapshot) -> Result<Vec<ChangeEntry>> {
     let mut entries = Vec::new();
     for chunk in text.split('\x1e') {
         let chunk = chunk.trim();
@@ -121,7 +130,7 @@ fn parse_git_log(text: &str) -> Result<Vec<ChangeEntry>> {
         }
 
         let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
-        let impact = analyze(&subject, &body, &paths);
+        let impact = analyze(catalog, &subject, &body, &paths);
 
         entries.push(ChangeEntry {
             sha,
@@ -149,7 +158,8 @@ mod tests {
         let sample = "\x1e\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x1fbbbbbbb\x1fAdd feature\x1fImpact: better UI\nRisk: none\x1fAda\x1fada@ex.com\x1f2026-07-17T00:00:00+08:00\n\
 10\t2\tcrates/codegen/bony-build/src/app.rs\n";
-        let entries = parse_git_log(sample).unwrap();
+        let catalog = CatalogSnapshot::empty();
+        let entries = parse_git_log(sample, &catalog).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].subject, "Add feature");
         assert_eq!(entries[0].additions, 10);

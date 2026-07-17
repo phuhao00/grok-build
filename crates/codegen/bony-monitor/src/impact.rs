@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+use crate::catalog::CatalogSnapshot;
 use crate::features::{self, DimensionHit, FeatureHit};
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,11 +42,10 @@ const RULES: &[Rule] = &[
         label: "桌面客户端",
         prefixes: &[
             "crates/codegen/bony-build/",
-            "crates/codegen/xai-grok-desktop/",
             "scripts/run-desktop.ps1",
         ],
         severity: "high",
-        improvement: "改进桌面交互、UI 或模型配置入口",
+        improvement: "改进桌面壳、对话、用量统计或项目工作区入口",
     },
     Rule {
         id: "monitor",
@@ -110,7 +110,12 @@ const RULES: &[Rule] = &[
     },
 ];
 
-pub fn analyze(subject: &str, body: &str, files: &[String]) -> ChangeImpact {
+pub fn analyze(
+    catalog: &CatalogSnapshot,
+    subject: &str,
+    body: &str,
+    files: &[String],
+) -> ChangeImpact {
     let mut areas = Vec::new();
     let mut tags = Vec::new();
     let mut improvements = Vec::new();
@@ -184,7 +189,7 @@ pub fn analyze(subject: &str, body: &str, files: &[String]) -> ChangeImpact {
     }
 
     let (feature_hits, dimensions, checklist) =
-        features::analyze_features_full(subject, body, files);
+        features::analyze_features_full(catalog, subject, body, files);
 
     for f in &feature_hits {
         if !tags.iter().any(|t| t == &f.id) {
