@@ -6,6 +6,7 @@
 
 [快速开始](#快速开始) ·
 [功能](#功能) ·
+[Web 监控](#web-监控) ·
 [模型与供应商](#模型与供应商) ·
 [架构](#架构) ·
 [开发](#开发)
@@ -39,6 +40,28 @@
 | 工具与权限 | 内联工具卡片；可选人工批准（`--ask-permissions`） |
 | 中文界面 | 系统中文字体（如微软雅黑），避免乱码 |
 | 快捷键 | **Enter** 发送，**Shift+Enter** 换行 |
+| Web 监控 | 架构分层总览 + 每次提交的影响 / 改进 / 风险时间线 |
+
+---
+
+## Web 监控
+
+本地仪表盘，用于查看 **整体架构** 与 **每一次改动带来的影响**：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-monitor.ps1
+# 浏览器打开 http://127.0.0.1:8787
+```
+
+能力：
+
+- **功能影响矩阵**：对话、模型切换、登录认证、多供应商、工具执行、权限、会话 ACP、工作区、TUI、监控、文档等
+- **多维度评估**：用户体验 / 功能能力 / 安全 / 稳定性 / 兼容性 / 性能 / 开发体验 / 文档
+- 每次提交的**用户影响说明** + **建议验证清单**
+- 架构分层、流程图与截图
+- 支持在 commit message 写 `Impact:` / `改进:` / `Risk:` / `风险:`
+
+实现：`crates/codegen/bony-monitor`（Axum）。
 
 ---
 
@@ -157,6 +180,7 @@ grok agent stdio  →  MvpAgent / SessionActor
 | 路径 | 说明 |
 |------|------|
 | `crates/codegen/bony-build` | Bony Build 桌面客户端 |
+| `crates/codegen/bony-monitor` | 架构与改动影响 Web 监控 |
 | `crates/codegen/xai-grok-shell` | Agent 运行时、stdio / headless |
 | `crates/codegen/xai-grok-pager*` | 官方 TUI（`grok`） |
 | `crates/codegen/xai-grok-agent` / `*-tools` / `*-workspace` | Agent、工具、工作区 |

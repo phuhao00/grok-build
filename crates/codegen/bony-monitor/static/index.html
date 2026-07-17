@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bony Monitor</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div>
+          <h1>Bony Monitor</h1>
+          <p class="muted">架构 · 功能影响 · 改动回归清单</p>
+        </div>
+      </div>
+      <div class="top-meta" id="top-meta">加载中…</div>
+    </header>
+
+    <section class="stats" id="stats"></section>
+
+    <section class="panel full">
+      <div class="panel-head">
+        <h2>功能影响矩阵</h2>
+        <span class="muted">覆盖对话、模型、认证、工具等产品能力；热度来自近期提交</span>
+      </div>
+      <div class="feature-grid" id="feature-grid"></div>
+    </section>
+
+    <main class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>项目架构</h2>
+          <span class="muted" id="arch-blurb"></span>
+        </div>
+        <div class="layers" id="layers"></div>
+        <div class="flows" id="flows"></div>
+        <div class="diagrams" id="diagrams"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>改动时间线</h2>
+          <div class="filters" id="filters"></div>
+        </div>
+        <div class="timeline" id="timeline"></div>
+      </section>
+    </main>
+  </div>
+
+  <aside class="drawer hidden" id="drawer">
+    <div class="drawer-head">
+      <h2 id="drawer-title">改动详情</h2>
+      <button type="button" class="ghost" id="drawer-close">关闭</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+  <div class="backdrop hidden" id="backdrop"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

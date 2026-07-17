@@ -21,6 +21,7 @@ members = [
     "crates/codegen/xai-grok-config",
     "crates/codegen/xai-grok-config-types",
     "crates/codegen/bony-build",
+    "crates/codegen/bony-monitor",
     "crates/codegen/xai-grok-env",
     "crates/codegen/xai-grok-hooks",
     "crates/codegen/xai-grok-http",
