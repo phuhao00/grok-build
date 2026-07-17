@@ -1,69 +1,173 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bony Monitor</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <div class="shell">
-    <header class="top">
-      <div class="brand">
-        <div class="brand-mark"></div>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary">
+      <div class="sidebar-brand">
+        <div class="brand-mark" aria-hidden="true"></div>
         <div>
-          <h1>Bony Monitor</h1>
-          <p class="muted">架构 · 功能影响 · 改动回归清单 · 热更新</p>
+          <div class="brand-name">Bony Monitor</div>
+          <div class="brand-sub">Architecture & impact</div>
         </div>
       </div>
-      <div class="top-meta">
-        <div id="top-meta">加载中…</div>
-        <div class="muted" id="refresh-meta" style="margin-top:4px;font-size:12px"></div>
+
+      <nav class="side-nav" id="tabs" aria-label="Sections">
+        <button type="button" class="nav-item active" data-page="overview" aria-current="page">
+          <span class="nav-ico" aria-hidden="true">▣</span>
+          <span class="nav-text">
+            <span class="nav-title">Overview</span>
+            <span class="nav-desc">Features & architecture</span>
+          </span>
+          <kbd>1</kbd>
+        </button>
+        <button type="button" class="nav-item" data-page="workflow">
+          <span class="nav-ico" aria-hidden="true">⇢</span>
+          <span class="nav-text">
+            <span class="nav-title">How it works</span>
+            <span class="nav-desc">End-to-end flow</span>
+          </span>
+          <kbd>2</kbd>
+        </button>
+        <button type="button" class="nav-item" data-page="changes">
+          <span class="nav-ico" aria-hidden="true">≡</span>
+          <span class="nav-text">
+            <span class="nav-title">Changelog</span>
+            <span class="nav-desc">Commits & impact</span>
+          </span>
+          <kbd>3</kbd>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="side-meta" id="top-meta">Loading…</div>
+        <div class="side-meta dim" id="refresh-meta"></div>
       </div>
-    </header>
+    </aside>
 
-    <section class="stats" id="stats"></section>
+    <div class="main">
+      <header class="main-top">
+        <div>
+          <div class="crumb" id="crumb">Monitor / Overview</div>
+          <h1 class="page-title" id="page-title">Overview</h1>
+          <p class="page-sub" id="page-sub">Feature heat map and system layers</p>
+        </div>
+        <div class="main-actions">
+          <button type="button" class="btn-secondary" id="btn-refresh" title="Refresh data">Refresh</button>
+        </div>
+      </header>
 
-    <section class="panel full">
-      <div class="panel-head">
-        <h2>功能影响矩阵</h2>
-        <span class="muted">覆盖对话、模型、认证、工具等产品能力；热度来自近期提交</span>
+      <section class="stats" id="stats"></section>
+
+      <div class="main-scroll">
+        <div id="page-overview" class="page">
+          <section class="panel full">
+            <div class="panel-head">
+              <div>
+                <h2>Feature impact</h2>
+                <p class="muted">Product capabilities touched by recent commits. Click a card to filter Changelog.</p>
+              </div>
+            </div>
+            <div class="feature-grid" id="feature-grid"></div>
+          </section>
+
+          <section class="panel full">
+            <div class="panel-head">
+              <div>
+                <h2>Architecture</h2>
+                <p class="muted" id="arch-blurb"></p>
+              </div>
+            </div>
+            <div class="layers" id="layers"></div>
+            <div class="flows" id="flows"></div>
+            <div class="diagrams" id="diagrams"></div>
+          </section>
+        </div>
+
+        <div id="page-workflow" class="page hidden">
+          <section class="panel full workflow-hero">
+            <div class="workflow-hero-grid">
+              <div>
+                <div class="q-label">Question</div>
+                <h2 id="workflow-question">How does this project work?</h2>
+                <p class="workflow-answer" id="workflow-answer"></p>
+                <p class="muted" id="workflow-blurb"></p>
+              </div>
+              <figure class="hero-shot" id="workflow-hero-shot">
+                <img src="/repo-docs/bony-build-desktop.png" alt="Bony Build desktop" loading="lazy" data-lightbox="1" />
+                <figcaption>Desktop shell — where a prompt starts</figcaption>
+              </figure>
+            </div>
+            <div class="pipeline" id="workflow-pipeline" aria-label="Pipeline"></div>
+          </section>
+
+          <div id="workflow-scenes" class="workflow-scenes"></div>
+
+          <section class="panel full">
+            <div class="panel-head">
+              <div>
+                <h2>Gallery</h2>
+                <p class="muted">Click any image to enlarge</p>
+              </div>
+            </div>
+            <div class="gallery" id="workflow-gallery"></div>
+          </section>
+        </div>
+
+        <div id="page-changes" class="page hidden">
+          <section class="panel full changes-panel">
+            <div class="changes-toolbar">
+              <div class="changes-toolbar-left">
+                <h2>Recent changes</h2>
+                <span class="muted" id="changes-count"></span>
+              </div>
+              <div class="changes-toolbar-right">
+                <label class="field">
+                  <span class="field-label">Feature</span>
+                  <select id="filter-select" aria-label="Filter by feature">
+                    <option value="all">All features</option>
+                  </select>
+                </label>
+                <label class="field grow">
+                  <span class="field-label">Search</span>
+                  <input id="change-search" type="search" placeholder="Filter by message, author, sha…" autocomplete="off" />
+                </label>
+              </div>
+            </div>
+            <div class="change-table-head" aria-hidden="true">
+              <span>Commit</span>
+              <span>Author</span>
+              <span>When</span>
+              <span>Diff</span>
+              <span>Impact</span>
+            </div>
+            <div class="timeline" id="timeline"></div>
+            <div id="filters" class="hidden" hidden></div>
+          </section>
+        </div>
       </div>
-      <div class="feature-grid" id="feature-grid"></div>
-    </section>
-
-    <main class="grid">
-      <section class="panel">
-        <div class="panel-head">
-          <h2>项目架构</h2>
-          <span class="muted" id="arch-blurb"></span>
-        </div>
-        <div class="layers" id="layers"></div>
-        <div class="flows" id="flows"></div>
-        <div class="diagrams" id="diagrams"></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>改动时间线</h2>
-          <div class="filters" id="filters"></div>
-        </div>
-        <div class="timeline" id="timeline"></div>
-      </section>
-    </main>
+    </div>
   </div>
 
-  <aside class="drawer hidden" id="drawer">
+  <aside class="drawer hidden" id="drawer" aria-label="Change details">
     <div class="drawer-head">
-      <h2 id="drawer-title">改动详情</h2>
-      <button type="button" class="ghost" id="drawer-close">关闭</button>
+      <h2 id="drawer-title">Change details</h2>
+      <button type="button" class="ghost" id="drawer-close">Close</button>
     </div>
     <div class="drawer-body" id="drawer-body"></div>
   </aside>
   <div class="backdrop hidden" id="backdrop"></div>
+
+  <div class="lightbox hidden" id="lightbox" role="dialog" aria-modal="true">
+    <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Close">✕</button>
+    <img id="lightbox-img" src="" alt="" />
+    <p class="lightbox-cap" id="lightbox-cap"></p>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

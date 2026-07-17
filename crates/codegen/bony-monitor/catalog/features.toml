@@ -262,13 +262,34 @@ user_impact = "不用桌面时，终端体验是否可用"
 id = "monitor"
 name = "Web 监控看板"
 category = "可观测性"
-description = "架构总览与改动影响展示"
+description = "架构总览、项目工作流程页与改动影响展示"
 user_facing = true
-paths = ["crates/codegen/bony-monitor/", "scripts/run-monitor.ps1"]
-names = ["bony-monitor", "run-monitor"]
-keywords = ["monitor", "监控", "impact", "catalog", "热更新"]
+paths = [
+  "crates/codegen/bony-monitor/",
+  "crates/codegen/bony-monitor/src/workflow.rs",
+  "scripts/run-monitor.ps1",
+]
+names = ["bony-monitor", "run-monitor", "workflow.rs"]
+keywords = ["monitor", "监控", "impact", "catalog", "热更新", "workflow", "怎么工作"]
 severity = "medium"
-user_impact = "团队能否看清架构与每次改动的功能影响"
+user_impact = "团队能否看清架构、一次提问怎么跑通、以及改动影响"
+
+[[features]]
+id = "project-workflow"
+name = "项目工作流程"
+category = "文档"
+description = "回答「项目是怎么工作的」：一次提问的端到端调用链"
+user_facing = true
+paths = [
+  "crates/codegen/bony-monitor/src/workflow.rs",
+  "crates/codegen/bony-monitor/static/",
+  "ARCHITECTURE.md",
+  "docs/architecture-turn-flow.png",
+]
+names = ["workflow.rs"]
+keywords = ["workflow", "流程", "怎么工作", "turn", "ACP", "SessionActor"]
+severity = "medium"
+user_impact = "新人能否顺着一条具体提问理解系统如何运转"
 
 [[features]]
 id = "docs-product"

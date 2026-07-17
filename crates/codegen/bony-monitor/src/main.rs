@@ -5,6 +5,7 @@ mod catalog;
 mod features;
 mod git;
 mod impact;
+mod workflow;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -81,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health", get(api_health))
         .route("/api/overview", get(api_overview))
         .route("/api/architecture", get(api_architecture))
+        .route("/api/workflow", get(api_workflow))
         .route("/api/features", get(api_features))
         .route("/api/changes", get(api_changes))
         .route("/api/changes/{sha}", get(api_change_detail))
@@ -169,6 +171,10 @@ async fn api_architecture(
 ) -> Json<architecture::ArchitectureOverview> {
     let catalog = state.catalog.snapshot();
     Json(architecture::overview(&catalog))
+}
+
+async fn api_workflow() -> Json<workflow::WorkflowOverview> {
+    Json(workflow::overview())
 }
 
 async fn api_features(
