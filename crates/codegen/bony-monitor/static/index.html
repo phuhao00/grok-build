@@ -97,6 +97,7 @@
                 <h2 id="workflow-question">How does this project work?</h2>
                 <p class="workflow-answer" id="workflow-answer"></p>
                 <p class="muted" id="workflow-blurb"></p>
+                <p class="muted" id="workflow-module-meta"></p>
               </div>
               <figure class="hero-shot" id="workflow-hero-shot">
                 <img src="/repo-docs/bony-build-desktop.png" alt="Bony Build desktop" loading="lazy" data-lightbox="1" />
@@ -104,6 +105,49 @@
               </figure>
             </div>
             <div class="pipeline" id="workflow-pipeline" aria-label="Pipeline"></div>
+          </section>
+
+          <section class="panel full">
+            <div class="panel-head">
+              <div>
+                <h2>Architecture charts</h2>
+                <p class="muted">Sequence, layer stack, call graph, and live module counts</p>
+              </div>
+            </div>
+            <div class="chart-grid" id="workflow-charts"></div>
+          </section>
+
+          <section class="panel full">
+            <div class="panel-head">
+              <div>
+                <h2>Code map</h2>
+                <p class="muted">Curated anchors + scanned modules — filter by layer / crate</p>
+              </div>
+              <div class="code-map-tools">
+                <label class="field compact">
+                  <span class="field-label">Layer</span>
+                  <select id="code-map-layer" aria-label="Filter code map by layer"></select>
+                </label>
+                <label class="field compact grow">
+                  <span class="field-label">Search</span>
+                  <input id="code-map-search" type="search" placeholder="path, crate, symbol…" autocomplete="off" />
+                </label>
+              </div>
+            </div>
+            <div class="code-map-table-wrap">
+              <table class="code-map-table" id="workflow-code-map">
+                <thead>
+                  <tr>
+                    <th>Layer</th>
+                    <th>Crate</th>
+                    <th>Path</th>
+                    <th>Role</th>
+                    <th>Symbols</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </section>
 
           <div id="workflow-scenes" class="workflow-scenes"></div>

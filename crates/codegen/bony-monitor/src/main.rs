@@ -173,8 +173,11 @@ async fn api_architecture(
     Json(architecture::overview(&catalog))
 }
 
-async fn api_workflow() -> Json<workflow::WorkflowOverview> {
-    Json(workflow::overview())
+async fn api_workflow(
+    State(state): State<Arc<AppState>>,
+) -> Json<workflow::WorkflowOverview> {
+    let catalog = state.catalog.snapshot();
+    Json(workflow::overview(&catalog))
 }
 
 async fn api_features(

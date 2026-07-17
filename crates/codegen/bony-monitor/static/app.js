@@ -6,6 +6,8 @@ const state = {
   search: "",
   filterMode: "feature", // feature | area
   page: "overview",
+  codeMapLayer: "all",
+  codeMapSearch: "",
 };
 
 const PAGE_META = {
@@ -17,7 +19,7 @@ const PAGE_META = {
   workflow: {
     crumb: "Monitor / How it works",
     title: "How it works",
-    sub: "Follow one prompt from UI to agent loop",
+    sub: "Charts + source map from UI → ACP → Session → tools",
   },
   changes: {
     crumb: "Monitor / Changelog",
@@ -235,20 +237,294 @@ function highlightStep(sceneId, stepN) {
   });
 }
 
+function chartById(id) {
+  return (state.workflow?.charts || []).find((c) => c.id === id);
+}
+
+function renderChartCard(chart) {
+  if (!chart) return "";
+  return `
+    <article class="chart-card" data-chart="${escapeHtml(chart.id)}">
+      <header>
+        <h3>${escapeHtml(chart.title)}</h3>
+        <p class="muted">${escapeHtml(chart.caption || "")}</p>
+      </header>
+      <div class="chart-body">${renderChartSvg(chart)}</div>
+    </article>`;
+}
+
+function renderChartSvg(chart) {
+  switch (chart.kind) {
+    case "sequence":
+      return svgSequence(chart);
+    case "layers":
+      return svgLayers(chart);
+    case "flow":
+    case "callgraph":
+      return svgGraph(chart);
+    case "bars":
+      return svgBars(chart);
+    default:
+      return `<p class="muted">Unknown chart kind</p>`;
+  }
+}
+
+function svgSequence(chart) {
+  const actors = chart.actors || [];
+  const messages = chart.messages || [];
+  const markerId = `arrow-${String(chart.id || "seq").replace(/[^a-z0-9_-]/gi, "")}`;
+  const colW = 118;
+  const left = 28;
+  const top = 42;
+  const rowH = 34;
+  const width = Math.max(640, left * 2 + actors.length * colW);
+  const height = top + 28 + messages.length * rowH + 24;
+  const xOf = (name) => {
+    const i = actors.indexOf(name);
+    return left + (i < 0 ? 0 : i) * colW + colW / 2;
+  };
+
+  const heads = actors
+    .map((a, i) => {
+      const x = left + i * colW + colW / 2;
+      return `
+        <rect x="${x - 48}" y="8" width="96" height="26" rx="8" class="seq-head" />
+        <text x="${x}" y="25" text-anchor="middle" class="seq-head-text">${escapeHtml(a)}</text>
+        <line x1="${x}" y1="${top}" x2="${x}" y2="${height - 12}" class="seq-life" />`;
+    })
+    .join("");
+
+  const lines = messages
+    .map((m, i) => {
+      const y = top + 18 + i * rowH;
+      const x1 = xOf(m.from);
+      const x2 = xOf(m.to);
+      const mid = (x1 + x2) / 2;
+      const dir = x2 >= x1 ? 1 : -1;
+      return `
+        <line x1="${x1}" y1="${y}" x2="${x2 - 8 * dir}" y2="${y}" class="seq-msg" marker-end="url(#${markerId})" />
+        <text x="${mid}" y="${y - 6}" text-anchor="middle" class="seq-label">${escapeHtml(
+          m.label
+        )}</text>`;
+    })
+    .join("");
+
+  return `
+    <svg class="chart-svg sequence" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+      chart.title
+    )}">
+      <defs>
+        <marker id="${markerId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="#0a84ff" />
+        </marker>
+      </defs>
+      ${heads}${lines}
+    </svg>`;
+}
+
+function svgLayers(chart) {
+  const bands = chart.bands || [];
+  const width = 720;
+  const rowH = 72;
+  const height = 16 + bands.length * (rowH + 10);
+  const rows = bands
+    .map((b, i) => {
+      const y = 12 + i * (rowH + 10);
+      const chips = (b.items || [])
+        .map(
+          (it, j) =>
+            `<span class="layer-chip" style="--i:${j}">${escapeHtml(it)}</span>`
+        )
+        .join("");
+      return `
+        <div class="layer-band" style="--y:${y}px">
+          <div class="layer-band-title">
+            <strong>${escapeHtml(b.name)}</strong>
+            <span class="muted">${escapeHtml(b.summary || "")}</span>
+          </div>
+          <div class="layer-band-items">${chips}</div>
+        </div>`;
+    })
+    .join("");
+  return `<div class="layer-stack" style="min-height:${height}px">${rows}</div>`;
+}
+
+function svgGraph(chart) {
+  const nodes = chart.nodes || [];
+  const edges = chart.edges || [];
+  const markerId = `garrow-${String(chart.id || "g").replace(/[^a-z0-9_-]/gi, "")}`;
+  const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(nodes.length))));
+  const cellW = 168;
+  const cellH = 88;
+  const width = 40 + cols * cellW;
+  const rows = Math.ceil(nodes.length / cols) || 1;
+  const height = 40 + rows * cellH;
+  const pos = {};
+  nodes.forEach((n, i) => {
+    const c = i % cols;
+    const r = Math.floor(i / cols);
+    pos[n.id] = { x: 28 + c * cellW + cellW / 2, y: 28 + r * cellH + 28 };
+  });
+
+  const edgeLines = edges
+    .map((e) => {
+      const a = pos[e.from];
+      const b = pos[e.to];
+      if (!a || !b) return "";
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      return `
+        <line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" class="graph-edge" marker-end="url(#${markerId})" />
+        <text x="${mx}" y="${my - 4}" text-anchor="middle" class="graph-edge-label">${escapeHtml(
+          e.label || ""
+        )}</text>`;
+    })
+    .join("");
+
+  const nodeEls = nodes
+    .map((n) => {
+      const p = pos[n.id];
+      return `
+        <g class="graph-node">
+          <rect x="${p.x - 70}" y="${p.y - 22}" width="140" height="44" rx="10" />
+          <text x="${p.x}" y="${p.y - 2}" text-anchor="middle" class="graph-title">${escapeHtml(
+            n.label
+          )}</text>
+          <text x="${p.x}" y="${p.y + 14}" text-anchor="middle" class="graph-detail">${escapeHtml(
+            n.detail || ""
+          )}</text>
+        </g>`;
+    })
+    .join("");
+
+  return `
+    <svg class="chart-svg graph" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+      chart.title
+    )}">
+      <defs>
+        <marker id="${markerId}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="#8e8e93" />
+        </marker>
+      </defs>
+      ${edgeLines}${nodeEls}
+    </svg>`;
+}
+
+function svgBars(chart) {
+  const bars = chart.bars || [];
+  if (!bars.length) return `<p class="muted">No scanned modules yet</p>`;
+  const max = Math.max(1, ...bars.map((b) => Number(b.value) || 0));
+  const rows = bars
+    .map((b) => {
+      const pct = Math.round(((Number(b.value) || 0) / max) * 100);
+      return `
+        <div class="bar-row">
+          <div class="bar-label" title="${escapeHtml(b.note || "")}">${escapeHtml(b.label)}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+          <div class="bar-value">${escapeHtml(String(b.value))}</div>
+        </div>`;
+    })
+    .join("");
+  return `<div class="bar-chart">${rows}</div>`;
+}
+
+function renderCodeRefs(refs) {
+  if (!refs?.length) return "";
+  return `
+    <div class="code-refs">
+      ${refs
+        .map(
+          (r) => `
+        <div class="code-ref">
+          <code class="code-path">${escapeHtml(r.path)}</code>
+          <span class="code-sym">${escapeHtml(r.symbol)}</span>
+          <span class="muted">${escapeHtml(r.note || "")}</span>
+        </div>`
+        )
+        .join("")}
+    </div>`;
+}
+
+function renderCodeMap() {
+  const wf = state.workflow;
+  const tbody = document.querySelector("#workflow-code-map tbody");
+  const layerSel = document.getElementById("code-map-layer");
+  if (!tbody || !wf) return;
+
+  const layers = ["all", ...new Set((wf.code_map || []).map((m) => m.layer).filter(Boolean))];
+  if (layerSel && layerSel.options.length !== layers.length) {
+    const prev = state.codeMapLayer;
+    layerSel.innerHTML = layers
+      .map(
+        (l) =>
+          `<option value="${escapeHtml(l)}"${l === prev ? " selected" : ""}>${escapeHtml(
+            l === "all" ? "All layers" : l
+          )}</option>`
+      )
+      .join("");
+  }
+
+  const q = (state.codeMapSearch || "").trim().toLowerCase();
+  const rows = (wf.code_map || []).filter((m) => {
+    if (state.codeMapLayer !== "all" && m.layer !== state.codeMapLayer) return false;
+    if (!q) return true;
+    const hay = [m.path, m.stem, m.crate_name, m.role, ...(m.key_types || [])]
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+
+  tbody.innerHTML = rows.length
+    ? rows
+        .map(
+          (m) => `
+      <tr>
+        <td><span class="layer-tag">${escapeHtml(m.layer)}</span></td>
+        <td>${escapeHtml(m.crate_name)}</td>
+        <td><code>${escapeHtml(m.path)}</code></td>
+        <td>${escapeHtml(m.role)}</td>
+        <td class="syms">${(m.key_types || [])
+          .map((t) => `<code>${escapeHtml(t)}</code>`)
+          .join(" ")}</td>
+      </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5" class="muted">No modules match this filter.</td></tr>`;
+}
+
 function renderWorkflow(wf) {
   if (!wf) return;
   document.getElementById("workflow-question").textContent = wf.question;
   document.getElementById("workflow-answer").textContent = wf.answer;
   document.getElementById("workflow-blurb").textContent = wf.blurb;
+  const meta = document.getElementById("workflow-module-meta");
+  if (meta) {
+    meta.textContent = `Live scan: ${wf.module_count ?? 0} source files · ${
+      wf.desktop_module_count ?? 0
+    } desktop modules · ${(wf.charts || []).length} charts`;
+  }
+
+  const chartRoot = document.getElementById("workflow-charts");
+  if (chartRoot) {
+    chartRoot.innerHTML = (wf.charts || []).map((c) => renderChartCard(c)).join("");
+  }
+  renderCodeMap();
 
   const firstScene = wf.scenes?.[0];
   const pipeline = document.getElementById("workflow-pipeline");
-  const chips = (firstScene?.steps || []).map((s) => ({
-    label: s.chip || s.title,
-    n: s.n,
-    scene: firstScene.id,
-  }));
-  pipeline.innerHTML = chips
+  const pipeSource =
+    (wf.pipeline || []).length > 0
+      ? wf.pipeline.map((label, i) => ({
+          label,
+          n: i + 1,
+          scene: firstScene?.id || "ask",
+        }))
+      : (firstScene?.steps || []).map((s) => ({
+          label: s.chip || s.title,
+          n: s.n,
+          scene: firstScene.id,
+        }));
+  pipeline.innerHTML = pipeSource
     .map((c, i) => {
       const node = `<button type="button" class="pipe-node" data-scene="${escapeHtml(
         c.scene
@@ -276,6 +552,7 @@ function renderWorkflow(wf) {
             <div class="crates">
               ${(s.crates || []).map((c) => `<span class="chip">${escapeHtml(c)}</span>`).join("")}
             </div>
+            ${renderCodeRefs(s.code_refs)}
           </div>
         </article>`
         )
@@ -290,7 +567,13 @@ function renderWorkflow(wf) {
             )}" loading="lazy" />
             <figcaption>${escapeHtml(scene.image_caption || "")}</figcaption>
           </figure>`
-        : `<div class="scene-placeholder">See the gallery below for visuals</div>`;
+        : `<div class="scene-placeholder">Charts above cover this path</div>`;
+
+      const embedded = (scene.chart_ids || [])
+        .map((id) => chartById(id))
+        .filter(Boolean)
+        .map((c) => renderChartCard(c))
+        .join("");
 
       return `
         <section class="panel full scene ${isOpen ? "open" : ""}" data-scene="${escapeHtml(
@@ -310,6 +593,11 @@ function renderWorkflow(wf) {
               </div>
               ${visual}
             </div>
+            ${
+              embedded
+                ? `<div class="scene-charts chart-grid">${embedded}</div>`
+                : ""
+            }
           </div>
         </section>`;
     })
@@ -659,6 +947,14 @@ function bindUiOnce() {
   document.getElementById("change-search")?.addEventListener("input", (e) => {
     state.search = e.target.value || "";
     renderTimeline();
+  });
+  document.getElementById("code-map-layer")?.addEventListener("change", (e) => {
+    state.codeMapLayer = e.target.value || "all";
+    renderCodeMap();
+  });
+  document.getElementById("code-map-search")?.addEventListener("input", (e) => {
+    state.codeMapSearch = e.target.value || "";
+    renderCodeMap();
   });
 
   // Event delegation — survives auto-refresh re-renders.
