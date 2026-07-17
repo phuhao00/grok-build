@@ -10,6 +10,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use xai_acp_lib::LineBufferedRead;
 
 use crate::events::{AgentEvent, ModelChoice, PermissionOptionView, UiCommand};
+use crate::usage::parse_usage_from_meta;
 
 #[derive(Clone)]
 pub struct BridgeConfig {
@@ -148,6 +149,12 @@ impl acp::Client for DesktopAcpClient {
                     }
                 }
                 self.emit(AgentEvent::ToolUpdate { id, status, detail });
+            }
+            acp::SessionUpdate::UsageUpdate(u) => {
+                self.emit(AgentEvent::ContextUsage {
+                    used: u.used,
+                    size: u.size,
+                });
             }
             _ => {}
         }
@@ -535,8 +542,10 @@ async fn run_session(
                     .await
                 {
                     Ok(resp) => {
+                        let usage = parse_usage_from_meta(resp.meta.as_ref());
                         emit(AgentEvent::TurnDone {
                             stop_reason: format!("{:?}", resp.stop_reason),
+                            usage,
                         });
                     }
                     Err(e) => {

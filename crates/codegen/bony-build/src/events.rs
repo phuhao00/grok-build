@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::usage::TokenUsage;
+
 /// Commands sent from the UI thread to the agent bridge.
 #[derive(Debug)]
 pub enum UiCommand {
@@ -49,7 +51,12 @@ pub enum AgentEvent {
         title: String,
         options: Vec<PermissionOptionView>,
     },
-    TurnDone { stop_reason: String },
+    TurnDone {
+        stop_reason: String,
+        usage: TokenUsage,
+    },
+    /// Context window snapshot (when the agent emits UsageUpdate).
+    ContextUsage { used: u64, size: u64 },
     Error(String),
 }
 

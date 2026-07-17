@@ -7,6 +7,7 @@ mod events;
 mod fonts;
 mod markdown;
 mod model;
+mod usage;
 
 use std::path::PathBuf;
 
@@ -59,7 +60,8 @@ fn main() -> eframe::Result<()> {
 
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
+            .with_inner_size([1440.0, 920.0])
+            .with_min_inner_size([1100.0, 720.0])
             .with_title("Bony Build"),
         ..Default::default()
     };
