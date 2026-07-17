@@ -19,6 +19,7 @@ eframe = { version = "0.31", default-features = true }
 egui = "0.31"
 egui_plot = "0.31"
 futures = { workspace = true }
+rfd = "0.15"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

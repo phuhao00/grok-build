@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use crate::events::{AgentEvent, ModelChoice, PermissionOptionView};
 use crate::usage::{
-    aggregate_tasks, load_recent_turns, SessionUsageState, TaskSummary, TokenUsage, TurnRecord,
+    aggregate_tasks, load_recent_projects, load_recent_turns, remember_project, SessionUsageState,
+    TaskSummary, TokenUsage, TurnRecord,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +53,39 @@ pub enum UsageTab {
     Turns,
 }
 
+/// Primary left-nav destination (Codex-style shell).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MainNav {
+    #[default]
+    Chat,
+    Scheduled,
+    Plugins,
+    Sites,
+    PullRequests,
+}
+
+impl MainNav {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Chat => "聊天",
+            Self::Scheduled => "已安排",
+            Self::Plugins => "插件",
+            Self::Sites => "站点",
+            Self::PullRequests => "拉取请求",
+        }
+    }
+
+    pub fn placeholder_blurb(self) -> &'static str {
+        match self {
+            Self::Chat => "",
+            Self::Scheduled => "定时任务与提醒将出现在这里。当前版本尚未接入调度能力。",
+            Self::Plugins => "浏览并启用扩展插件。插件市场即将推出。",
+            Self::Sites => "管理预览站点与部署入口。站点功能即将推出。",
+            Self::PullRequests => "查看与处理拉取请求。Git 集成即将推出。",
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct AppModel {
     pub status: String,
@@ -73,6 +107,14 @@ pub struct AppModel {
     pub show_model_picker: bool,
     pub show_user_menu: bool,
     pub show_usage_detail: bool,
+    pub show_about: bool,
+    pub show_left_sidebar: bool,
+    pub show_right_panel: bool,
+    pub focus_composer: bool,
+    pub main_nav: MainNav,
+    /// Local filter for the task list (sidebar search).
+    pub task_filter: String,
+    pub show_task_search: bool,
     pub usage_tab: UsageTab,
     /// `None` = live current session; `Some` = read-only history view.
     pub viewing_session_id: Option<String>,
@@ -83,10 +125,14 @@ pub struct AppModel {
     pub history_turns: Vec<TurnRecord>,
     /// Expanded turn ids in the usage detail panel.
     pub history_expanded: Vec<String>,
+    /// Recent project working directories.
+    pub recent_projects: Vec<PathBuf>,
 }
 
 impl AppModel {
-    pub fn new() -> Self {
+    pub fn new(initial_cwd: PathBuf) -> Self {
+        let mut recent = load_recent_projects();
+        remember_project(&mut recent, &initial_cwd);
         Self {
             status: "Connecting…".into(),
             auto_scroll: true,
@@ -96,8 +142,15 @@ impl AppModel {
             task_title: "新任务".into(),
             display_name: default_display_name(),
             history_turns: load_recent_turns(80),
+            cwd: Some(initial_cwd),
+            recent_projects: recent,
+            show_left_sidebar: true,
             ..Default::default()
         }
+    }
+
+    pub fn go_chat(&mut self) {
+        self.main_nav = MainNav::Chat;
     }
 
     pub fn apply(&mut self, event: AgentEvent) {
@@ -273,6 +326,7 @@ impl AppModel {
 
     /// Clear local chat and start a fresh task UI (same ACP session).
     pub fn new_task(&mut self) {
+        self.main_nav = MainNav::Chat;
         self.viewing_session_id = None;
         self.live_timeline.clear();
         self.timeline.clear();
@@ -290,8 +344,28 @@ impl AppModel {
         }
     }
 
+    pub fn project_label(path: &std::path::Path) -> String {
+        path.file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| path.to_string_lossy().to_string())
+    }
+
+    pub fn filtered_tasks(&self) -> Vec<TaskSummary> {
+        let q = self.task_filter.trim().to_lowercase();
+        let tasks = self.tasks();
+        if q.is_empty() {
+            return tasks;
+        }
+        tasks
+            .into_iter()
+            .filter(|t| t.title.to_lowercase().contains(&q))
+            .collect()
+    }
+
     /// Read-only replay of a historical session's turns.
     pub fn load_task_view(&mut self, session_id: &str) {
+        self.main_nav = MainNav::Chat;
         if self.viewing_session_id.is_none() {
             self.live_timeline = self.timeline.clone();
         }
@@ -338,6 +412,7 @@ impl AppModel {
     }
 
     pub fn return_to_live(&mut self) {
+        self.main_nav = MainNav::Chat;
         if self.viewing_session_id.take().is_some() {
             self.timeline = std::mem::take(&mut self.live_timeline);
             self.task_title = self

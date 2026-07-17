@@ -136,6 +136,68 @@ pub fn turns_log_path() -> PathBuf {
     usage_dir().join("turns.jsonl")
 }
 
+pub fn projects_path() -> PathBuf {
+    usage_dir().join("projects.json")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ProjectsFile {
+    recent: Vec<PathBuf>,
+}
+
+pub fn load_recent_projects() -> Vec<PathBuf> {
+    let path = projects_path();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(file) = serde_json::from_str::<ProjectsFile>(&text) else {
+        return Vec::new();
+    };
+    file.recent
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .take(12)
+        .collect()
+}
+
+pub fn save_recent_projects(projects: &[PathBuf]) {
+    let dir = usage_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let file = ProjectsFile {
+        recent: projects.iter().take(12).cloned().collect(),
+    };
+    if let Ok(text) = serde_json::to_string_pretty(&file) {
+        let _ = std::fs::write(projects_path(), text);
+    }
+}
+
+/// Move `path` to the front of the recent list and persist.
+pub fn remember_project(projects: &mut Vec<PathBuf>, path: &Path) {
+    let Ok(canonical) = path.canonicalize() else {
+        // Still track the path even if canonicalize fails (e.g. not yet created).
+        projects.retain(|p| p != path);
+        projects.insert(0, path.to_path_buf());
+        if projects.len() > 12 {
+            projects.truncate(12);
+        }
+        save_recent_projects(projects);
+        return;
+    };
+    projects.retain(|p| {
+        p.canonicalize()
+            .map(|c| c != canonical)
+            .unwrap_or(true)
+            && p != path
+    });
+    projects.insert(0, canonical);
+    if projects.len() > 12 {
+        projects.truncate(12);
+    }
+    save_recent_projects(projects);
+}
+
 pub fn append_turn_record(record: &TurnRecord) -> Result<(), String> {
     let dir = usage_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

@@ -63,7 +63,9 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size([1100.0, 720.0])
-            .with_title("Bony Build"),
+            .with_title("Bony Build")
+            // Codex-style: single custom title bar (menus + window controls).
+            .with_decorations(false),
         ..Default::default()
     };
 

@@ -9,8 +9,8 @@ use crate::agent_bridge::{self, BridgeConfig};
 use crate::charts;
 use crate::events::{AgentEvent, UiCommand};
 use crate::markdown;
-use crate::model::{AppModel, Role, TimelineItem, UsageTab};
-use crate::usage::{aggregate_model_usage, format_tokens};
+use crate::model::{AppModel, MainNav, Role, TimelineItem, UsageTab};
+use crate::usage::{aggregate_model_usage, format_tokens, remember_project};
 
 const BG: Color32 = Color32::from_rgb(22, 22, 24);
 const SIDEBAR: Color32 = Color32::from_rgb(18, 18, 20);
@@ -30,6 +30,8 @@ const AVATAR: Color32 = Color32::from_rgb(70, 120, 220);
 const SELECTED: Color32 = Color32::from_rgb(42, 44, 52);
 const MAX_CHAT_W: f32 = 860.0;
 const SIDEBAR_W: f32 = 248.0;
+const RIGHT_PANEL_W: f32 = 280.0;
+const TITLE_BAR_H: f32 = 36.0;
 
 const STARTERS: &[&str] = &[
     "解释这个代码库的结构",
@@ -41,7 +43,7 @@ const STARTERS: &[&str] = &[
 pub struct BonyBuildApp {
     model: AppModel,
     event_rx: mpsc::Receiver<AgentEvent>,
-    event_tx: Option<mpsc::Sender<AgentEvent>>,
+    event_tx: mpsc::Sender<AgentEvent>,
     cmd_tx: Option<tokio_mpsc::UnboundedSender<UiCommand>>,
     started: bool,
     config: BridgeConfig,
@@ -53,9 +55,9 @@ impl BonyBuildApp {
         configure_style(&cc.egui_ctx);
         let (event_tx, event_rx) = mpsc::channel();
         Self {
-            model: AppModel::new(),
+            model: AppModel::new(config.cwd.clone()),
             event_rx,
-            event_tx: Some(event_tx),
+            event_tx,
             cmd_tx: None,
             started: false,
             config,
@@ -67,9 +69,53 @@ impl BonyBuildApp {
             return;
         }
         self.started = true;
-        if let Some(event_tx) = self.event_tx.take() {
-            let cmd_tx = agent_bridge::spawn_bridge(self.config.clone(), ctx.clone(), event_tx);
-            self.cmd_tx = Some(cmd_tx);
+        let cmd_tx =
+            agent_bridge::spawn_bridge(self.config.clone(), ctx.clone(), self.event_tx.clone());
+        self.cmd_tx = Some(cmd_tx);
+    }
+
+    /// Shut down the agent and reconnect against a new working directory.
+    fn switch_project(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
+        let same = self
+            .config
+            .cwd
+            .canonicalize()
+            .ok()
+            .zip(path.canonicalize().ok())
+            .is_some_and(|(a, b)| a == b);
+        if same {
+            self.model.go_chat();
+            return;
+        }
+        self.send_cmd(UiCommand::Shutdown);
+        self.cmd_tx = None;
+        self.config.cwd = path.clone();
+        remember_project(&mut self.model.recent_projects, &path);
+        self.model.cwd = Some(path);
+        self.model.connected = false;
+        self.model.session_id = None;
+        self.model.needs_login = false;
+        self.model.status = "Connecting…".into();
+        self.model.new_task();
+        self.model.usage = crate::usage::SessionUsageState::default();
+        let cmd_tx =
+            agent_bridge::spawn_bridge(self.config.clone(), ctx.clone(), self.event_tx.clone());
+        self.cmd_tx = Some(cmd_tx);
+        self.started = true;
+    }
+
+    fn pick_project(&mut self, ctx: &egui::Context) {
+        let start = self
+            .model
+            .cwd
+            .clone()
+            .unwrap_or_else(|| self.config.cwd.clone());
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("选择项目文件夹")
+            .set_directory(start)
+            .pick_folder()
+        {
+            self.switch_project(ctx, path);
         }
     }
 
@@ -114,85 +160,121 @@ impl eframe::App for BonyBuildApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(40));
         }
 
-        egui::SidePanel::left("codex_sidebar")
-            .exact_width(SIDEBAR_W)
-            .resizable(false)
-            .frame(
-                Frame::NONE
-                    .fill(SIDEBAR)
-                    .inner_margin(Margin::symmetric(12, 14))
-                    .stroke(Stroke::new(1.0, BORDER)),
-            )
-            .show(ctx, |ui| {
-                self.sidebar(ui);
-            });
+        self.title_bar(ctx);
+
+        if self.model.show_left_sidebar {
+            egui::SidePanel::left("codex_sidebar")
+                .exact_width(SIDEBAR_W)
+                .resizable(false)
+                .frame(
+                    Frame::NONE
+                        .fill(SIDEBAR)
+                        .inner_margin(Margin {
+                            left: 12,
+                            right: 12,
+                            top: 10,
+                            bottom: 12,
+                        }),
+                )
+                .show(ctx, |ui| {
+                    self.sidebar(ui, ctx);
+                });
+        }
+
+        if self.model.show_right_panel {
+            egui::SidePanel::right("codex_right")
+                .exact_width(RIGHT_PANEL_W)
+                .resizable(false)
+                .frame(
+                    Frame::NONE
+                        .fill(SIDEBAR)
+                        .inner_margin(Margin::symmetric(14, 14))
+                        .stroke(Stroke::new(1.0, BORDER)),
+                )
+                .show(ctx, |ui| {
+                    self.right_panel(ui);
+                });
+        }
+
+        let on_chat = self.model.main_nav == MainNav::Chat;
+        let show_task_title = on_chat
+            && (!self.model.is_empty_chat() || self.model.is_viewing_history());
 
         egui::CentralPanel::default()
             .frame(Frame::NONE.fill(BG).inner_margin(Margin::symmetric(0, 0)))
             .show(ctx, |ui| {
-                // Header (same centered column as chat)
-                Frame::NONE
-                    .fill(BG)
-                    .inner_margin(Margin::symmetric(0, 14))
-                    .stroke(Stroke::new(1.0, BORDER))
-                    .show(ui, |ui| {
-                        centered_column(ui, |ui| {
-                            self.main_header(ui);
-                        });
+                // No second control row under the window buttons — title only when needed.
+                if show_task_title || !on_chat {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(20.0);
+                        let title = if on_chat {
+                            self.model.task_title.as_str()
+                        } else {
+                            self.model.main_nav.title()
+                        };
+                        ui.label(RichText::new(title).size(14.0).strong().color(TEXT));
                     });
+                }
 
-                // Chat + floating composer stacked in a centered column.
-                let avail = ui.available_height();
-                let composer_h = 140.0;
-                let chat_h = (avail - composer_h).max(120.0);
+                if on_chat {
+                    let avail = ui.available_height();
+                    let composer_h = 140.0;
+                    let chat_h = (avail - composer_h).max(120.0);
 
-                egui::ScrollArea::vertical()
-                    .id_salt("chat_scroll")
-                    .stick_to_bottom(self.model.auto_scroll)
-                    .auto_shrink([false, false])
-                    .max_height(chat_h)
-                    .show(ui, |ui| {
-                        centered_column(ui, |ui| {
-                            if self.model.is_viewing_history() {
-                                ui.add_space(8.0);
-                                ui.vertical_centered(|ui| {
-                                    ui.label(
-                                        RichText::new("只读历史 · 发送新消息将回到当前会话")
-                                            .size(12.0)
-                                            .color(MUTED),
-                                    );
-                                });
-                                ui.add_space(8.0);
-                            }
-                            if self.model.is_empty_chat() {
-                                self.empty_state(ui);
-                            } else {
-                                self.timeline(ui);
-                            }
-                            if self.model.busy {
-                                ui.add_space(8.0);
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label(
-                                        RichText::new("处理中…").size(12.5).color(MUTED),
-                                    );
-                                });
-                            }
-                            ui.add_space(20.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("chat_scroll")
+                        .stick_to_bottom(self.model.auto_scroll)
+                        .auto_shrink([false, false])
+                        .max_height(chat_h)
+                        .show(ui, |ui| {
+                            centered_column(ui, |ui| {
+                                if self.model.is_viewing_history() {
+                                    ui.add_space(8.0);
+                                    ui.vertical_centered(|ui| {
+                                        ui.label(
+                                            RichText::new("只读历史 · 发送新消息将回到当前会话")
+                                                .size(12.0)
+                                                .color(MUTED),
+                                        );
+                                    });
+                                    ui.add_space(8.0);
+                                }
+                                if self.model.is_empty_chat() {
+                                    self.empty_state(ui);
+                                } else {
+                                    self.timeline(ui);
+                                }
+                                if self.model.busy {
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(
+                                            RichText::new("处理中…").size(12.5).color(MUTED),
+                                        );
+                                    });
+                                }
+                                ui.add_space(20.0);
+                            });
                         });
-                    });
 
-                ui.add_space(8.0);
-                centered_column(ui, |ui| {
-                    self.floating_composer(ui);
-                });
-                ui.add_space(12.0);
+                    ui.add_space(8.0);
+                    centered_column(ui, |ui| {
+                        self.floating_composer(ui);
+                    });
+                    ui.add_space(12.0);
+                } else {
+                    centered_column(ui, |ui| {
+                        self.nav_placeholder(ui);
+                    });
+                }
             });
 
         self.user_menu_popup(ctx);
         self.usage_detail_window(ctx);
         self.permission_modal(ctx);
         self.model_picker_modal(ctx);
+        self.about_modal(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -201,7 +283,177 @@ impl eframe::App for BonyBuildApp {
 }
 
 impl BonyBuildApp {
-    fn sidebar(&mut self, ui: &mut egui::Ui) {
+    /// One-row Codex chrome: left controls + menus | drag | right toggle + window buttons.
+    fn title_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("title_bar")
+            .exact_height(TITLE_BAR_H)
+            .frame(
+                Frame::NONE
+                    .fill(SIDEBAR)
+                    .inner_margin(Margin {
+                        left: 8,
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                    }),
+            )
+            .show(ctx, |ui| {
+                let full = ui.max_rect();
+                ui.painter()
+                    .hline(full.x_range(), full.bottom(), Stroke::new(1.0, BORDER));
+
+                ui.allocate_ui_with_layout(
+                    Vec2::new(full.width(), TITLE_BAR_H),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        // —— Left cluster ——
+                        let left_on = self.model.show_left_sidebar;
+                        if panel_toggle_btn(ui, PanelSide::Left, "切换侧栏", left_on) {
+                            self.model.show_left_sidebar = !left_on;
+                        }
+                        let can_back = self.model.is_viewing_history();
+                        if nav_chevron_btn(ui, NavDir::Back, "返回当前会话", can_back) && can_back
+                        {
+                            self.model.return_to_live();
+                        }
+                        let _ = nav_chevron_btn(ui, NavDir::Forward, "前进", false);
+
+                        ui.add_space(8.0);
+                        ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
+                        ui.visuals_mut().button_frame = false;
+                        for (label, build) in [
+                            ("文件", 0u8),
+                            ("编辑", 1u8),
+                            ("视图", 2u8),
+                            ("帮助", 3u8),
+                        ] {
+                            ui.menu_button(RichText::new(label).size(13.0).color(MUTED), |ui| {
+                                ui.visuals_mut().button_frame = true;
+                                match build {
+                                    0 => {
+                                        if ui.button("新建任务").clicked() {
+                                            self.model.new_task();
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("打开项目…").clicked() {
+                                            self.pick_project(ctx);
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
+                                        if ui.button("退出").clicked() {
+                                            ui.close_menu();
+                                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                        }
+                                    }
+                                    1 => {
+                                        if ui.button("聚焦输入框").clicked() {
+                                            self.model.go_chat();
+                                            self.model.focus_composer = true;
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("清空草稿").clicked() {
+                                            self.model.draft.clear();
+                                            ui.close_menu();
+                                        }
+                                    }
+                                    2 => {
+                                        let left_label = if self.model.show_left_sidebar {
+                                            "隐藏侧栏"
+                                        } else {
+                                            "显示侧栏"
+                                        };
+                                        if ui.button(left_label).clicked() {
+                                            self.model.show_left_sidebar =
+                                                !self.model.show_left_sidebar;
+                                            ui.close_menu();
+                                        }
+                                        let right_label = if self.model.show_right_panel {
+                                            "隐藏右侧栏"
+                                        } else {
+                                            "显示右侧栏"
+                                        };
+                                        if ui.button(right_label).clicked() {
+                                            self.model.show_right_panel =
+                                                !self.model.show_right_panel;
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("使用统计").clicked() {
+                                            self.model.show_usage_detail = true;
+                                            ui.close_menu();
+                                        }
+                                    }
+                                    _ => {
+                                        if ui.button("关于 Bony Build").clicked() {
+                                            self.model.show_about = true;
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
+                            });
+                        }
+
+                        // —— Right cluster (same row): panel toggle + window controls ——
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if win_chrome_btn(ui, WinChrome::Close) {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                            let maximized =
+                                ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                            if win_chrome_btn(
+                                ui,
+                                if maximized {
+                                    WinChrome::Restore
+                                } else {
+                                    WinChrome::Maximize
+                                },
+                            ) {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                    !maximized,
+                                ));
+                            }
+                            if win_chrome_btn(ui, WinChrome::Minimize) {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                            }
+
+                            ui.add_space(4.0);
+                            let right_on = self.model.show_right_panel;
+                            if panel_toggle_btn(
+                                ui,
+                                PanelSide::Right,
+                                if right_on {
+                                    "隐藏右侧栏"
+                                } else {
+                                    "显示右侧栏"
+                                },
+                                right_on,
+                            ) {
+                                self.model.show_right_panel = !right_on;
+                            }
+
+                            // Drag the empty middle.
+                            let drag_rect = ui.available_rect_before_wrap();
+                            let drag_resp = ui.interact(
+                                drag_rect,
+                                ui.id().with("title_drag"),
+                                egui::Sense::click_and_drag(),
+                            );
+                            if drag_resp.drag_started_by(egui::PointerButton::Primary) {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            }
+                            if drag_resp.double_clicked() {
+                                let maximized =
+                                    ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                    !maximized,
+                                ));
+                            }
+                        });
+                    },
+                );
+            });
+    }
+
+    fn sidebar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("Bony Build")
@@ -209,22 +461,107 @@ impl BonyBuildApp {
                     .strong()
                     .color(TEXT),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let search_on = self.model.show_task_search;
+                if search_icon_btn(ui, search_on) {
+                    self.model.show_task_search = !search_on;
+                    if !self.model.show_task_search {
+                        self.model.task_filter.clear();
+                    }
+                }
+            });
         });
-        ui.add_space(14.0);
 
-        if nav_item(ui, "新建任务", false) {
+        if self.model.show_task_search {
+            ui.add_space(6.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.model.task_filter)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("筛选任务…")
+                    .frame(true),
+            );
+        }
+
+        ui.add_space(12.0);
+
+        if nav_item(ui, "＋  新建任务", false) {
             self.model.new_task();
         }
         ui.add_space(2.0);
-        if nav_item(ui, "聊天", !self.model.is_viewing_history()) {
+        if nav_item(
+            ui,
+            "⏱  已安排",
+            self.model.main_nav == MainNav::Scheduled,
+        ) {
+            self.model.main_nav = MainNav::Scheduled;
+        }
+        ui.add_space(2.0);
+        if nav_item(ui, "@  插件", self.model.main_nav == MainNav::Plugins) {
+            self.model.main_nav = MainNav::Plugins;
+        }
+        ui.add_space(2.0);
+        if nav_item(ui, "▦  站点", self.model.main_nav == MainNav::Sites) {
+            self.model.main_nav = MainNav::Sites;
+        }
+        ui.add_space(2.0);
+        if nav_item(
+            ui,
+            "⎇  拉取请求",
+            self.model.main_nav == MainNav::PullRequests,
+        ) {
+            self.model.main_nav = MainNav::PullRequests;
+        }
+        ui.add_space(2.0);
+        let chat_selected =
+            self.model.main_nav == MainNav::Chat && !self.model.is_viewing_history();
+        if nav_item(ui, "⊕  聊天", chat_selected) {
             self.model.return_to_live();
         }
 
-        ui.add_space(16.0);
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("项目").size(12.0).color(MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("＋").size(13.0).color(MUTED))
+                            .fill(Color32::TRANSPARENT)
+                            .frame(false),
+                    )
+                    .on_hover_text("打开项目")
+                    .clicked()
+                {
+                    self.pick_project(ctx);
+                }
+            });
+        });
+        ui.add_space(4.0);
+
+        let projects = self.model.recent_projects.clone();
+        let current = self.model.cwd.clone();
+        if projects.is_empty() {
+            ui.label(RichText::new("没有项目").size(12.0).color(MUTED));
+        } else {
+            for path in &projects {
+                let label = AppModel::project_label(path);
+                let selected = current
+                    .as_ref()
+                    .and_then(|c| c.canonicalize().ok())
+                    .zip(path.canonicalize().ok())
+                    .is_some_and(|(a, b)| a == b)
+                    || current.as_ref() == Some(path);
+                if nav_item(ui, &format!("📁  {label}"), selected) {
+                    self.switch_project(ctx, path.clone());
+                }
+                ui.add_space(1.0);
+            }
+        }
+
+        ui.add_space(14.0);
         ui.label(RichText::new("任务").size(12.0).color(MUTED));
         ui.add_space(6.0);
 
-        let tasks = self.model.tasks();
+        let tasks = self.model.filtered_tasks();
         let viewing = self.model.viewing_session_id.clone();
         let live_id = self.model.session_id.clone();
 
@@ -234,9 +571,13 @@ impl BonyBuildApp {
             .show(ui, |ui| {
                 if tasks.is_empty() {
                     ui.label(
-                        RichText::new("还没有任务记录")
-                            .size(12.0)
-                            .color(MUTED),
+                        RichText::new(if self.model.task_filter.trim().is_empty() {
+                            "还没有任务记录"
+                        } else {
+                            "没有匹配的任务"
+                        })
+                        .size(12.0)
+                        .color(MUTED),
                     );
                 }
                 for task in &tasks {
@@ -276,7 +617,7 @@ impl BonyBuildApp {
                     }
                     if resp.clicked() {
                         if live_id.as_ref() == Some(&task.session_id) && viewing.is_none() {
-                            // already live for this session
+                            self.model.go_chat();
                         } else if live_id.as_ref() == Some(&task.session_id) {
                             self.model.return_to_live();
                         } else {
@@ -316,40 +657,159 @@ impl BonyBuildApp {
         });
     }
 
-    fn main_header(&mut self, ui: &mut egui::Ui) {
+    fn right_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(&self.model.task_title)
-                    .size(16.0)
+                RichText::new("详情")
+                    .size(15.0)
                     .strong()
                     .color(TEXT),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (label, color) = if self.model.needs_login {
-                    ("需要登录", DANGER)
-                } else if self.model.status.contains("Error") {
-                    ("出错", DANGER)
-                } else if self.model.busy {
-                    ("思考中…", MUTED)
-                } else if self.model.connected {
-                    ("就绪", OK)
-                } else {
-                    ("连接中…", MUTED)
-                };
-                ui.label(RichText::new(label).size(12.5).color(color));
-                if self.model.busy {
-                    ui.spinner();
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("✕").size(13.0).color(MUTED))
+                            .fill(Color32::TRANSPARENT)
+                            .frame(false),
+                    )
+                    .clicked()
+                {
+                    self.model.show_right_panel = false;
                 }
-                let folder = self
-                    .model
-                    .cwd
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "workspace".into());
-                ui.label(RichText::new(folder).size(12.0).color(MUTED));
             });
         });
+        ui.add_space(12.0);
+
+        let status = if self.model.needs_login {
+            ("需要登录", DANGER)
+        } else if self.model.status.contains("Error") {
+            ("出错", DANGER)
+        } else if self.model.busy {
+            ("思考中…", MUTED)
+        } else if self.model.connected {
+            ("就绪", OK)
+        } else {
+            ("连接中…", MUTED)
+        };
+        ui.label(RichText::new("会话").size(12.0).color(MUTED));
+        ui.label(RichText::new(status.0).size(14.0).color(status.1));
+        ui.add_space(10.0);
+
+        ui.label(RichText::new("工作目录").size(12.0).color(MUTED));
+        let cwd = self
+            .model
+            .cwd
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "—".into());
+        ui.label(RichText::new(cwd).size(12.5).color(TEXT));
+        ui.add_space(10.0);
+
+        ui.label(RichText::new("模型").size(12.0).color(MUTED));
+        ui.label(
+            RichText::new(&self.model.current_model_name)
+                .size(13.5)
+                .color(TEXT),
+        );
+        ui.add_space(10.0);
+
+        let total = self.model.usage.cumulative.total_tokens;
+        let hist: u64 = self
+            .model
+            .history_turns
+            .iter()
+            .map(|t| t.usage_delta.total_tokens)
+            .sum();
+        ui.label(RichText::new("Token").size(12.0).color(MUTED));
+        ui.label(
+            RichText::new(format!("Σ {}", format_tokens(total.max(hist))))
+                .size(14.0)
+                .strong()
+                .color(TEXT),
+        );
+        ui.add_space(16.0);
+
+        if ui
+            .add(
+                egui::Button::new(RichText::new("打开使用统计").size(13.0).color(TEXT))
+                    .fill(PANEL_2)
+                    .min_size(Vec2::new(ui.available_width(), 34.0))
+                    .corner_radius(CornerRadius::same(8)),
+            )
+            .clicked()
+        {
+            self.model.show_usage_detail = true;
+        }
+    }
+
+    fn nav_placeholder(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(80.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                RichText::new(self.model.main_nav.title())
+                    .size(22.0)
+                    .strong()
+                    .color(TEXT),
+            );
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(self.model.main_nav.placeholder_blurb())
+                    .size(14.0)
+                    .color(MUTED),
+            );
+            ui.add_space(20.0);
+            if ui
+                .add(
+                    egui::Button::new(RichText::new("回到聊天").size(13.0).color(BG).strong())
+                        .fill(ACCENT)
+                        .min_size(Vec2::new(120.0, 34.0))
+                        .corner_radius(CornerRadius::same(10)),
+                )
+                .clicked()
+            {
+                self.model.go_chat();
+            }
+        });
+    }
+
+    fn about_modal(&mut self, ctx: &egui::Context) {
+        if !self.model.show_about {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("关于 Bony Build")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_min_width(320.0);
+                ui.label(
+                    RichText::new("Bony Build")
+                        .size(18.0)
+                        .strong()
+                        .color(TEXT),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("原生桌面客户端 · ACP + Grok agent")
+                        .size(13.0)
+                        .color(MUTED),
+                );
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(format!("版本 {}", env!("CARGO_PKG_VERSION")))
+                        .size(12.5)
+                        .color(MUTED),
+                );
+                ui.add_space(14.0);
+                if ui.button("关闭").clicked() {
+                    self.model.show_about = false;
+                }
+            });
+        if !open {
+            self.model.show_about = false;
+        }
     }
 
     fn floating_composer(&mut self, ui: &mut egui::Ui) {
@@ -383,6 +843,10 @@ impl BonyBuildApp {
                     .interactive(self.model.connected && !self.model.needs_login)
                     .hint_text(RichText::new(hint).color(MUTED));
                 let response = ui.add(edit);
+                if self.model.focus_composer {
+                    response.request_focus();
+                    self.model.focus_composer = false;
+                }
 
                 let enter_send = response.has_focus()
                     && ui.input(|i| {
@@ -1473,6 +1937,226 @@ fn empty_hint(ui: &mut egui::Ui, text: &str) {
                 ui.label(RichText::new(text).size(13.5).color(MUTED));
             });
         });
+}
+
+#[derive(Clone, Copy)]
+enum NavDir {
+    Back,
+    Forward,
+}
+
+#[derive(Clone, Copy)]
+enum PanelSide {
+    Left,
+    Right,
+}
+
+fn panel_toggle_btn(ui: &mut egui::Ui, side: PanelSide, tip: &str, active: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), egui::Sense::click());
+    let resp = resp.on_hover_text(tip);
+    if resp.hovered() || active {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(6), SELECTED);
+    }
+    let color = if active || resp.hovered() { TEXT } else { MUTED };
+    let stroke = Stroke::new(1.3, color);
+    let outer = egui::Rect::from_center_size(rect.center(), Vec2::new(14.0, 11.0));
+    ui.painter()
+        .rect_stroke(outer, CornerRadius::same(1), stroke, egui::StrokeKind::Outside);
+    match side {
+        PanelSide::Left => {
+            let x = outer.left() + 4.5;
+            ui.painter().line_segment(
+                [egui::pos2(x, outer.top() + 1.0), egui::pos2(x, outer.bottom() - 1.0)],
+                stroke,
+            );
+            let pane = egui::Rect::from_min_max(
+                egui::pos2(outer.left() + 1.0, outer.top() + 1.0),
+                egui::pos2(x, outer.bottom() - 1.0),
+            );
+            ui.painter().rect_filled(pane, CornerRadius::ZERO, color.linear_multiply(0.35));
+        }
+        PanelSide::Right => {
+            let x = outer.right() - 4.5;
+            ui.painter().line_segment(
+                [egui::pos2(x, outer.top() + 1.0), egui::pos2(x, outer.bottom() - 1.0)],
+                stroke,
+            );
+            let pane = egui::Rect::from_min_max(
+                egui::pos2(x, outer.top() + 1.0),
+                egui::pos2(outer.right() - 1.0, outer.bottom() - 1.0),
+            );
+            ui.painter().rect_filled(pane, CornerRadius::ZERO, color.linear_multiply(0.35));
+        }
+    }
+    resp.clicked()
+}
+
+fn nav_chevron_btn(ui: &mut egui::Ui, dir: NavDir, tip: &str, enabled: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), egui::Sense::click());
+    let resp = resp.on_hover_text(tip);
+    // Soft rounded plate on hover (Codex-style).
+    if resp.hovered() {
+        ui.painter().rect_filled(
+            rect.shrink(1.0),
+            CornerRadius::same(7),
+            Color32::from_rgb(48, 48, 54),
+        );
+    }
+
+    let color = if !enabled {
+        Color32::from_rgb(88, 88, 96)
+    } else if resp.hovered() {
+        Color32::from_rgb(230, 230, 234)
+    } else {
+        Color32::from_rgb(168, 168, 176)
+    };
+    let stroke = Stroke::new(1.6, color);
+    let c = rect.center();
+
+    // Shaft + arrowhead (← / →), not a bare chevron.
+    let half_len = 6.5;
+    let head = 4.2;
+    match dir {
+        NavDir::Back => {
+            let tip = egui::pos2(c.x - half_len, c.y);
+            let tail = egui::pos2(c.x + half_len, c.y);
+            ui.painter().line_segment([tip, tail], stroke);
+            ui.painter().line_segment(
+                [egui::pos2(tip.x + head, tip.y - head), tip],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [egui::pos2(tip.x + head, tip.y + head), tip],
+                stroke,
+            );
+        }
+        NavDir::Forward => {
+            let tip = egui::pos2(c.x + half_len, c.y);
+            let tail = egui::pos2(c.x - half_len, c.y);
+            ui.painter().line_segment([tail, tip], stroke);
+            ui.painter().line_segment(
+                [egui::pos2(tip.x - head, tip.y - head), tip],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [egui::pos2(tip.x - head, tip.y + head), tip],
+                stroke,
+            );
+        }
+    }
+    enabled && resp.clicked()
+}
+
+fn search_icon_btn(ui: &mut egui::Ui, active: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(26.0), egui::Sense::click());
+    let resp = resp.on_hover_text("搜索任务");
+    if resp.hovered() || active {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(6), SELECTED);
+    }
+    let color = if active || resp.hovered() { TEXT } else { MUTED };
+    let stroke = Stroke::new(1.4, color);
+    let c = egui::pos2(rect.center().x - 1.2, rect.center().y - 1.2);
+    let r = 5.2;
+    ui.painter().circle_stroke(c, r, stroke);
+    let handle_start = egui::pos2(c.x + r * 0.72, c.y + r * 0.72);
+    let handle_end = egui::pos2(rect.center().x + 6.2, rect.center().y + 6.2);
+    ui.painter()
+        .line_segment([handle_start, handle_end], stroke);
+    resp.clicked()
+}
+
+#[derive(Clone, Copy)]
+enum WinChrome {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+/// Vector window controls — glyphs often fail with CJK UI fonts.
+fn win_chrome_btn(ui: &mut egui::Ui, kind: WinChrome) -> bool {
+    let danger = matches!(kind, WinChrome::Close);
+    let tip = match kind {
+        WinChrome::Minimize => "最小化",
+        WinChrome::Maximize => "最大化",
+        WinChrome::Restore => "还原",
+        WinChrome::Close => "关闭",
+    };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(46.0, TITLE_BAR_H), egui::Sense::click());
+    let resp = resp.on_hover_text(tip);
+
+    let hover_bg = if danger {
+        Color32::from_rgb(196, 64, 64)
+    } else {
+        Color32::from_rgb(52, 52, 58)
+    };
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::ZERO, hover_bg);
+    }
+
+    let icon = if resp.hovered() && danger {
+        TEXT
+    } else if resp.hovered() {
+        TEXT
+    } else {
+        Color32::from_rgb(200, 200, 206)
+    };
+    let stroke = Stroke::new(1.35, icon);
+    let c = rect.center();
+
+    match kind {
+        WinChrome::Minimize => {
+            let half = 5.5;
+            ui.painter().line_segment(
+                [egui::pos2(c.x - half, c.y), egui::pos2(c.x + half, c.y)],
+                stroke,
+            );
+        }
+        WinChrome::Maximize => {
+            let half = 5.0;
+            let r = egui::Rect::from_center_size(c, Vec2::splat(half * 2.0));
+            ui.painter().rect_stroke(r, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
+        }
+        WinChrome::Restore => {
+            let s = 4.2;
+            let back = egui::Rect::from_min_size(
+                egui::pos2(c.x - s + 1.5, c.y - s - 1.0),
+                Vec2::splat(s * 1.7),
+            );
+            let front = egui::Rect::from_min_size(
+                egui::pos2(c.x - s - 1.0, c.y - s + 1.5),
+                Vec2::splat(s * 1.7),
+            );
+            ui.painter()
+                .rect_stroke(back, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
+            ui.painter()
+                .rect_filled(front, CornerRadius::ZERO, SIDEBAR);
+            ui.painter()
+                .rect_stroke(front, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
+        }
+        WinChrome::Close => {
+            let half = 5.0;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(c.x - half, c.y - half),
+                    egui::pos2(c.x + half, c.y + half),
+                ],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [
+                    egui::pos2(c.x + half, c.y - half),
+                    egui::pos2(c.x - half, c.y + half),
+                ],
+                stroke,
+            );
+        }
+    }
+
+    resp.clicked()
 }
 
 fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
