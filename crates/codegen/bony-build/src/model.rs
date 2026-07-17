@@ -63,7 +63,7 @@ impl AppModel {
         Self {
             status: "Connecting…".into(),
             auto_scroll: true,
-            login_message: "Sign in to chat with Grok.".into(),
+            login_message: "Sign in to chat with Bony Build.".into(),
             current_model_id: String::new(),
             current_model_name: "model".into(),
             ..Default::default()

@@ -1,7 +1,9 @@
-# Grok Build 架构与 Agent 实现
+# Bony Build 架构与 Agent 实现
 
-> SpaceXAI 终端 AI coding agent（Rust）。本文描述仓库分层、Agent 装配与 Session 运行时细节。  
+> Bony Build：基于 SpaceXAI / Grok agent 运行时的桌面与终端 AI coding agent（Rust）。
+> 本文描述仓库分层、Agent 装配与 Session 运行时细节。
 > 源码同步自 SpaceXAI monorepo；根 `Cargo.toml` 为生成物，请优先改各 crate 的 `Cargo.toml`。
+> 桌面客户端 crate：`crates/codegen/bony-build`（`cargo run -p bony-build`）。
 
 ---
 

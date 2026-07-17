@@ -1,6 +1,6 @@
-# xai-grok-desktop
+# Bony Build
 
-Native desktop client for Grok Build. Built with **eframe/egui** and talks to the
+Native desktop client for **Bony Build**. Built with **eframe/egui** and talks to the
 agent over **ACP stdio** (`grok agent stdio`).
 
 ## Prerequisites
@@ -13,7 +13,7 @@ agent over **ACP stdio** (`grok agent stdio`).
 
 ### Custom / arbitrary LLM providers
 
-Desktop does not hardcode xAI. Model routing comes from the `grok` agent +
+Desktop does not hardcode a single vendor. Model routing comes from the agent +
 `%USERPROFILE%\.grok\config.toml`. Example (OpenAI-compatible):
 
 ```toml
@@ -45,7 +45,9 @@ outside restricted environments, then retry.
 ```powershell
 cd c:\Users\HHaou\grok-build
 $env:CARGO_TARGET_DIR = "$PWD\target"
-cargo run -p xai-grok-desktop
+cargo run -p bony-build
+# or
+powershell -ExecutionPolicy Bypass -File .\scripts\run-desktop.ps1
 ```
 
 Options:
@@ -53,20 +55,21 @@ Options:
 ```text
 --cwd <path>           Session working directory (default: cwd)
 --grok-bin <path>      Path to grok executable
---always-approve       Auto-approve tool permissions (alias: --yolo)
+--ask-permissions      Require manual tool approval (default: auto-approve)
 ```
 
 ## What you get
 
 - Chat window with streaming assistant text
-- Right panel for tool calls
-- Modal for permission Approve / Deny
+- Model picker (session switch + persist default)
+- Inline tool cards and permission Approve / Deny
 - Cancel in-flight turn
+- CJK UI fonts on Windows
 
 ## Architecture
 
 ```text
-GrokDesktop (egui)
+Bony Build (egui)
     │  ACP JSON-RPC over stdio
     ▼
 grok agent stdio  →  MvpAgent / SessionActor

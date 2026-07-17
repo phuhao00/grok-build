@@ -1,4 +1,4 @@
-# Grok Build local dev launcher (Windows)
+# Bony Build local dev launcher (Windows)
 # Usage:
 #   cd c:\Users\HHaou\grok-build
 #   powershell -ExecutionPolicy Bypass -File .\scripts\run-dev.ps1
@@ -47,7 +47,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $Bin = Join-Path $env:CARGO_TARGET_DIR "debug\xai-grok-pager.exe"
 Write-Host ""
-Write-Host "Starting Grok Build TUI..." -ForegroundColor Green
+Write-Host "Starting Bony Build TUI..." -ForegroundColor Green
 Write-Host "First launch opens the browser for grok.com login."
 Write-Host ""
 & $Bin @args

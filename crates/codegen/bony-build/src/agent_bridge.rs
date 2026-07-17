@@ -342,8 +342,8 @@ async fn run_session(
                         .terminal(false),
                 )
                 .client_info(
-                    acp::Implementation::new("xai-grok-desktop", env!("CARGO_PKG_VERSION"))
-                        .title("Grok Desktop"),
+                    acp::Implementation::new("bony-build", env!("CARGO_PKG_VERSION"))
+                        .title("Bony Build"),
                 )
                 .meta(
                     serde_json::json!({
@@ -390,7 +390,7 @@ async fn run_session(
     {
         let _ = child.kill().await;
         emit(AgentEvent::NeedsLogin {
-            message: "Sign in with Grok, or configure any LLM in ~/.grok/config.toml ([model.*] + api_key/env_key) and restart.".into(),
+            message: "Sign in, or configure any LLM in ~/.grok/config.toml ([model.*] + api_key/env_key) and restart.".into(),
         });
         // Wait for Login / Shutdown before reconnecting.
         while let Some(cmd) = cmd_rx.recv().await {

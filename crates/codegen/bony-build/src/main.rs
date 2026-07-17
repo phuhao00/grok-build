@@ -1,4 +1,4 @@
-//! Grok Build native desktop client (egui + ACP stdio).
+//! Bony Build native desktop client (egui + ACP stdio).
 
 mod agent_bridge;
 mod app;
@@ -14,12 +14,12 @@ use clap::Parser;
 use eframe::egui;
 
 use crate::agent_bridge::{resolve_grok_bin, BridgeConfig};
-use crate::app::GrokDesktopApp;
+use crate::app::BonyBuildApp;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "xai-grok-desktop",
-    about = "Native desktop client for Grok Build"
+    name = "bony-build",
+    about = "Native desktop client for Bony Build"
 )]
 struct Args {
     /// Working directory for the agent session (default: current directory).
@@ -60,13 +60,13 @@ fn main() -> eframe::Result<()> {
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 720.0])
-            .with_title("Grok Desktop"),
+            .with_title("Bony Build"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Grok Desktop",
+        "Bony Build",
         native,
-        Box::new(move |cc| Ok(Box::new(GrokDesktopApp::new(cc, config)))),
+        Box::new(move |cc| Ok(Box::new(BonyBuildApp::new(cc, config)))),
     )
 }

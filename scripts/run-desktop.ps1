@@ -1,4 +1,4 @@
-# Build and run the Grok Desktop client.
+# Build and run the Bony Build desktop client.
 # Usage: powershell -ExecutionPolicy Bypass -File .\scripts\run-desktop.ps1
 
 $ErrorActionPreference = "Stop"
@@ -35,11 +35,11 @@ if (-not (Get-Command grok -ErrorAction SilentlyContinue)) {
     Write-Host "grok not found on PATH. Install with: npm i -g @xai-official/grok" -ForegroundColor Yellow
 }
 
-Write-Host "Building xai-grok-desktop..." -ForegroundColor Cyan
+Write-Host "Building Bony Build..." -ForegroundColor Cyan
 if ($args.Count -gt 0) {
-    cargo run -p xai-grok-desktop -- @args
+    cargo run -p bony-build -- @args
 } else {
-    cargo run -p xai-grok-desktop
+    cargo run -p bony-build
 }
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

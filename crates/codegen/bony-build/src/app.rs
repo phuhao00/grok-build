@@ -32,7 +32,7 @@ const STARTERS: &[&str] = &[
     "总结认证是怎么工作的",
 ];
 
-pub struct GrokDesktopApp {
+pub struct BonyBuildApp {
     model: AppModel,
     event_rx: mpsc::Receiver<AgentEvent>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
@@ -41,7 +41,7 @@ pub struct GrokDesktopApp {
     config: BridgeConfig,
 }
 
-impl GrokDesktopApp {
+impl BonyBuildApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: BridgeConfig) -> Self {
         crate::fonts::install(&cc.egui_ctx);
         configure_style(&cc.egui_ctx);
@@ -99,7 +99,7 @@ impl GrokDesktopApp {
     }
 }
 
-impl eframe::App for GrokDesktopApp {
+impl eframe::App for BonyBuildApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ensure_started(ctx);
         self.drain_events();
@@ -162,11 +162,11 @@ impl eframe::App for GrokDesktopApp {
     }
 }
 
-impl GrokDesktopApp {
+impl BonyBuildApp {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         chat_column(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Grok").size(17.0).strong().color(TEXT));
+                ui.label(RichText::new("Bony Build").size(17.0).strong().color(TEXT));
                 ui.add_space(10.0);
 
                 let folder = self

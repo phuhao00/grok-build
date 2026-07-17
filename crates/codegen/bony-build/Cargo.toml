@@ -1,13 +1,13 @@
 [package]
-name = "xai-grok-desktop"
+name = "bony-build"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Native desktop client for Grok Build (egui + ACP stdio)"
+description = "Bony Build native desktop client (egui + ACP stdio)"
 publish = false
 
 [[bin]]
-name = "xai-grok-desktop"
+name = "bony-build"
 path = "src/main.rs"
 
 [dependencies]
