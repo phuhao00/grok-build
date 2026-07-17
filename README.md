@@ -1,128 +1,196 @@
 <div align="center">
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png">
-    <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
-  </picture>
-  <br>
-  Grok Build (<code>grok</code>)
-</h1>
+# Bony Build
 
-**Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
-full-screen TUI that understands your codebase, edits files, executes shell
-commands, searches the web, and manages long-running tasks — interactively,
-headlessly for scripting/CI, or embedded in editors via the Agent Client
-Protocol (ACP).
+**桌面端 AI 编程助手** — 在当前工作区探索代码、改文件、跑工具。
 
-[Installing the released binary](#installing-the-released-binary) ·
-[Building from source](#building-from-source) ·
-[Documentation](#documentation) ·
-[Repository layout](#repository-layout) ·
-[Development](#development) ·
-[Contributing](#contributing) ·
-[License](#license)
+[快速开始](#快速开始) ·
+[功能](#功能) ·
+[模型与供应商](#模型与供应商) ·
+[架构](#架构) ·
+[开发](#开发)
 
-![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
-
-**Learn more about Grok Build at [x.ai/cli](https://x.ai/cli)**
-
-This repository contains the Rust source for the `grok` CLI/TUI and its agent
-runtime. It is synced periodically from the SpaceXAI monorepo.
+![Bony Build 桌面端](docs/bony-build-desktop.png)
 
 </div>
 
 ---
 
-## Installing the released binary
+## 这是什么
 
-Prebuilt binaries are published for macOS, Linux, and Windows:
+**Bony Build** 是一个原生桌面客户端（Rust / egui），通过 [ACP](https://agentclientprotocol.com/) 驱动本地 `grok agent stdio` 运行时，在仓库工作区里完成对话式编程：
 
-```sh
-curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
-irm https://x.ai/cli/install.ps1 | iex          # Windows PowerShell
-grok --version
+- 解释代码库结构、排查最近改动中的问题
+- 补测试、总结认证 / 架构等实现细节
+- 自动调用终端、文件编辑、搜索等工具（默认可自动批准）
+
+底层复用 SpaceXAI Grok agent 运行时；产品品牌与桌面壳为 **Bony Build**。仓库：[`phuhao00/bony-build`](https://github.com/phuhao00/bony-build)。
+
+---
+
+## 功能
+
+| 能力 | 说明 |
+|------|------|
+| 对话工作区 | 左对齐时间线、Markdown 渲染、用户气泡 / 助手卡片 |
+| 快速开始 | 一键发起常见任务（解释结构、找 bug、补测试、总结认证等） |
+| 模型切换 | 顶栏 / 输入区点击模型名，切换当前会话并写入默认配置 |
+| 多供应商 | Kimi / Qwen / 智谱 / OpenAI 兼容端 / Anthropic Messages 等 |
+| 工具与权限 | 内联工具卡片；可选人工批准（`--ask-permissions`） |
+| 中文界面 | 系统中文字体（如微软雅黑），避免乱码 |
+| 快捷键 | **Enter** 发送，**Shift+Enter** 换行 |
+
+---
+
+## 快速开始
+
+### 依赖
+
+1. **Rust**（见 [`rust-toolchain.toml`](rust-toolchain.toml)）
+2. **`grok` CLI**（agent 子进程）  
+   ```powershell
+   npm i -g @xai-official/grok
+   grok --version
+   ```
+3. **凭证**（任选其一）  
+   - 在 `%USERPROFILE%\.grok\config.toml` 配置 BYOK 模型 + 对应环境变量（推荐）  
+   - 或 `grok login` / `XAI_API_KEY`
+
+### 启动桌面端
+
+```powershell
+# 推荐
+powershell -ExecutionPolicy Bypass -File .\scripts\run-desktop.ps1
+
+# 或
+$env:CARGO_TARGET_DIR = "$PWD\target"
+cargo run -p bony-build
 ```
 
-See the [changelog](https://x.ai/build/changelog) for the latest fixes,
-features, and improvements in each release.
+常用参数：
 
-## Building from source
-
-Requirements:
-
-- **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml);
-  `rustup` installs it automatically on first build.
-- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) (a
-  [dotslash](https://dotslash-cli.com) launcher) or falls back to a `protoc` on
-  `PATH` / `$PROTOC`.
-- macOS and Linux are supported build hosts; Windows builds are best-effort
-  and not currently tested from this tree.
-
-```sh
-cargo run -p xai-grok-pager-bin              # build + launch the TUI
-cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xai-grok-pager
-cargo check -p xai-grok-pager-bin            # fast validation
+```text
+--cwd <path>        会话工作目录（默认当前目录）
+--grok-bin <path>   grok 可执行文件路径
+--ask-permissions   工具需手动批准（默认自动批准）
 ```
 
-The binary artifact is named `xai-grok-pager`; official installs ship it as
-`grok`. On first launch it opens your browser to authenticate — see the
-[authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
+Windows 若遇到 **os error 4551**（Smart App Control），请在可信终端中构建，或关闭 SAC 后重试。
 
-## Documentation
+### 也可使用终端 TUI
 
-Full online documentation is available at
-[docs.x.ai/build/overview](https://docs.x.ai/build/overview).
+本仓库仍包含完整 `grok` TUI / agent 源码：
 
-The user guide ships with the pager crate:
-[`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)
-— getting started, keyboard shortcuts, slash commands, configuration, theming,
-MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
-
-## Repository layout
-
-| Path | Contents |
-|------|----------|
-| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds the `xai-grok-pager` binary |
-| `crates/codegen/xai-grok-pager` | The TUI: scrollback, prompt, modals, rendering |
-| `crates/codegen/xai-grok-shell` | Agent runtime + leader/stdio/headless entry points |
-| `crates/codegen/xai-grok-tools` | Tool implementations (terminal, file edit, search, ...) |
-| `crates/codegen/xai-grok-workspace` | Host filesystem, VCS, execution, checkpoints |
-| `crates/codegen/...` | The rest of the CLI crate closure (config, MCP, markdown, sandbox, ...) |
-| `crates/common/`, `crates/build/`, `prod/mc/` | Small shared leaf crates pulled in by the closure |
-| `third_party/` | Vendored upstream source (Mermaid diagram stack) — see below |
-
-> [!IMPORTANT]
-> The root `Cargo.toml` (workspace members, dependency versions, lints,
-> profiles) is **generated** — treat it as read-only. Prefer editing per-crate
-> `Cargo.toml` files.
-
-## Development
-
-```sh
-cargo check -p <crate>        # always target specific crates; full-workspace builds are slow
-cargo test -p xai-grok-config # per-crate tests
-cargo clippy -p <crate>       # lint config: clippy.toml at the repo root
-cargo fmt --all               # rustfmt.toml at the repo root
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-dev.ps1
+# 或
+cargo run -p xai-grok-pager-bin
 ```
 
-## Contributing
+官方预编译安装：
 
-> [!NOTE]
-> External contributions are not accepted. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+```powershell
+irm https://x.ai/cli/install.ps1 | iex
+```
 
-## License
+---
 
-First-party code in this repository is licensed under the **Apache License,
-Version 2.0** — see [`LICENSE`](LICENSE).
+## 模型与供应商
 
-Third-party and vendored code remains under its original licenses. See:
+模型目录与默认值由 `%USERPROFILE%\.grok\config.toml` 决定。桌面端启动后可点 **▾ 模型名** 切换；选择结果会同步写入 `[models] default`。
 
-- [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) — crates.io / git dependencies,
-  bundled UI themes, and **in-tree source ports** (including openai/codex and
-  sst/opencode tool implementations)
-- [`crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md`](crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md)
-  — crate-local notice for the codex and opencode ports (license texts +
-  Apache §4(b) change notice)
-- [`third_party/NOTICE`](third_party/NOTICE) — vendored Mermaid-stack index
+也可点弹窗中的 **编辑 config.toml** 手动配置。示例（通义 Qwen / DashScope）：
+
+```toml
+[models]
+default = "qwen-max"
+stream_tool_calls = false
+
+[model.qwen-max]
+model = "qwen-max"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+name = "Qwen Max"
+env_key = "DASHSCOPE_API_KEY"
+api_backend = "chat_completions"
+context_window = 32768
+```
+
+已验证可配：
+
+| 供应商 | 典型 `base_url` | 环境变量 |
+|--------|-----------------|----------|
+| 通义 Qwen | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
+| Kimi / Moonshot | `https://api.moonshot.cn/v1` | `MOONSHOT_API_KEY` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `ZHIPUAI_API_KEY` |
+| OpenAI 兼容 | 任意 `/v1` 端点 | 自定义 `env_key` |
+
+更多协议（Anthropic `messages`、Responses API、Ollama 等）见：  
+[`crates/codegen/xai-grok-pager/docs/user-guide/11-custom-models.md`](crates/codegen/xai-grok-pager/docs/user-guide/11-custom-models.md)
+
+配置或环境变量变更后请**重启桌面端**。可用 `grok models` 核对当前目录。
+
+---
+
+## 架构
+
+```text
+Bony Build (egui 桌面壳)
+        │  ACP JSON-RPC over stdio
+        ▼
+grok agent stdio  →  MvpAgent / SessionActor
+        │
+        ├─ 采样（多 backend）
+        ├─ 工具（终端 / 文件 / 搜索 …）
+        └─ Workspace / MCP / 子 agent
+```
+
+- 桌面 crate：[`crates/codegen/bony-build`](crates/codegen/bony-build)
+- 详细分层与 turn 流程：[`ARCHITECTURE.md`](ARCHITECTURE.md)
+- 架构图：[`docs/architecture-layers.png`](docs/architecture-layers.png)、[`docs/architecture-turn-flow.png`](docs/architecture-turn-flow.png)
+
+桌面端**不**内嵌完整 agent 运行时，而是驱动已安装的 `grok` 子进程。
+
+---
+
+## 仓库布局（摘要）
+
+| 路径 | 说明 |
+|------|------|
+| `crates/codegen/bony-build` | Bony Build 桌面客户端 |
+| `crates/codegen/xai-grok-shell` | Agent 运行时、stdio / headless |
+| `crates/codegen/xai-grok-pager*` | 官方 TUI（`grok`） |
+| `crates/codegen/xai-grok-agent` / `*-tools` / `*-workspace` | Agent、工具、工作区 |
+| `scripts/run-desktop.ps1` | 桌面端一键构建运行 |
+| `scripts/run-dev.ps1` | TUI 开发启动 |
+| `docs/` | 截图与架构图 |
+
+完整上游说明仍见各 crate 文档与 [user guide](crates/codegen/xai-grok-pager/docs/user-guide/)。
+
+---
+
+## 开发
+
+```powershell
+$env:CARGO_TARGET_DIR = "$PWD\target"
+$env:PROTOC = "$PWD\.tools\protoc\bin\protoc.exe"   # 若已放置 protoc
+cargo build -p bony-build
+cargo run -p bony-build -- --cwd $PWD
+```
+
+建议忽略本地产物：`target/`、`.tools/`、各类 `*.log`。
+
+---
+
+## 文档与许可
+
+- 用户指南：[`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)
+- 认证：[`02-authentication.md`](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md)
+- 自定义模型：[`11-custom-models.md`](crates/codegen/xai-grok-pager/docs/user-guide/11-custom-models.md)
+
+本仓库含从 SpaceXAI monorepo 同步的 agent / TUI 源码；桌面产品层为 Bony Build。许可证见根目录 [`LICENSE`](LICENSE)（若存在）及各 crate 声明。
+
+---
+
+## 致谢
+
+Agent 运行时与 `grok` CLI 能力来源于 [SpaceXAI / Grok Build](https://x.ai/cli) 生态。Bony Build 在其上提供多供应商桌面体验。
