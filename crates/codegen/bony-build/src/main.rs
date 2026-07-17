@@ -2,6 +2,7 @@
 
 mod agent_bridge;
 mod app;
+mod charts;
 mod config_io;
 mod events;
 mod fonts;

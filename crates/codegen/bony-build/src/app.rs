@@ -6,6 +6,7 @@ use eframe::egui::{self, Align2, Color32, CornerRadius, Frame, Margin, RichText,
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::agent_bridge::{self, BridgeConfig};
+use crate::charts;
 use crate::events::{AgentEvent, UiCommand};
 use crate::markdown;
 use crate::model::{AppModel, Role, TimelineItem, UsageTab};
@@ -504,7 +505,7 @@ impl BonyBuildApp {
                 ui.separator();
                 ui.add_space(4.0);
 
-                if menu_row(ui, "剩余用量", true) {
+                if menu_row(ui, "使用统计", true) {
                     self.model.show_usage_detail = true;
                     self.model.show_user_menu = false;
                 }
@@ -542,8 +543,8 @@ impl BonyBuildApp {
         }
 
         let screen = ctx.screen_rect();
-        let panel_w = (screen.width() * 0.52).clamp(520.0, 720.0);
-        let panel_h = (screen.height() * 0.72).clamp(420.0, 640.0);
+        let panel_w = (screen.width() * 0.58).clamp(560.0, 820.0);
+        let panel_h = (screen.height() * 0.78).clamp(480.0, 720.0);
 
         let mut close = false;
         egui::Area::new(egui::Id::new("usage_dim"))
@@ -560,12 +561,41 @@ impl BonyBuildApp {
 
         let model_stats = aggregate_model_usage(&self.model.history_turns);
         let turns: Vec<_> = self.model.history_turns.iter().rev().cloned().collect();
-        let sess = self.model.usage.cumulative.clone();
-        let sess_turns = self.model.usage.turns.len().max(turns.len());
+        // Prefer history totals so chips match charts (session cumulative can stay 0
+        // after "new task" clears local session turns).
+        let hist_total: u64 = self
+            .model
+            .history_turns
+            .iter()
+            .map(|t| t.usage_delta.total_tokens)
+            .sum();
+        let hist_in: u64 = self
+            .model
+            .history_turns
+            .iter()
+            .map(|t| t.usage_delta.input_tokens)
+            .sum();
+        let hist_out: u64 = self
+            .model
+            .history_turns
+            .iter()
+            .map(|t| t.usage_delta.output_tokens)
+            .sum();
+        let sess = &self.model.usage.cumulative;
+        let chip_total = hist_total.max(sess.total_tokens);
+        let chip_in = hist_in.max(sess.input_tokens);
+        let chip_out = hist_out.max(sess.output_tokens);
+        let sess_turns = self
+            .model
+            .history_turns
+            .len()
+            .max(self.model.usage.turns.len());
+        let ctx_used = sess.context_used;
+        let ctx_size = sess.context_size;
         let mut open = true;
         let tab = self.model.usage_tab;
 
-        egui::Window::new("剩余用量")
+        egui::Window::new("使用统计")
             .id(egui::Id::new("usage_sheet"))
             .collapsible(false)
             .resizable(false)
@@ -594,10 +624,10 @@ impl BonyBuildApp {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            RichText::new("剩余用量").size(18.0).strong().color(TEXT),
+                            RichText::new("使用统计").size(18.0).strong().color(TEXT),
                         );
                         ui.label(
-                            RichText::new("按模型与对话轮次查看 token 消耗")
+                            RichText::new("折线 / 柱状统计 · 模型与轮次明细")
                                 .size(12.5)
                                 .color(MUTED),
                         );
@@ -624,12 +654,12 @@ impl BonyBuildApp {
                 ui.horizontal(|ui| {
                     stat_chip(ui, "轮次", &sess_turns.to_string());
                     ui.add_space(8.0);
-                    stat_chip(ui, "合计", &format_tokens(sess.total_tokens));
+                    stat_chip(ui, "合计", &format_tokens(chip_total));
                     ui.add_space(8.0);
-                    stat_chip(ui, "输入", &format_tokens(sess.input_tokens));
+                    stat_chip(ui, "输入", &format_tokens(chip_in));
                     ui.add_space(8.0);
-                    stat_chip(ui, "输出", &format_tokens(sess.output_tokens));
-                    if let (Some(used), Some(size)) = (sess.context_used, sess.context_size) {
+                    stat_chip(ui, "输出", &format_tokens(chip_out));
+                    if let (Some(used), Some(size)) = (ctx_used, ctx_size) {
                         ui.add_space(8.0);
                         stat_chip(
                             ui,
@@ -639,26 +669,28 @@ impl BonyBuildApp {
                     }
                 });
 
-                ui.add_space(16.0);
+                ui.add_space(14.0);
 
                 // Tabs
                 ui.horizontal(|ui| {
-                    if segment_tab(ui, "使用过的模型", tab == UsageTab::Models) {
+                    if segment_tab(ui, "统计图", tab == UsageTab::Charts) {
+                        self.model.usage_tab = UsageTab::Charts;
+                    }
+                    ui.add_space(6.0);
+                    if segment_tab(ui, "模型", tab == UsageTab::Models) {
                         self.model.usage_tab = UsageTab::Models;
                     }
                     ui.add_space(6.0);
                     if segment_tab(
                         ui,
-                        &format!("对话轮次 ({})", turns.len()),
+                        &format!("轮次 ({})", turns.len()),
                         tab == UsageTab::Turns,
                     ) {
                         self.model.usage_tab = UsageTab::Turns;
                     }
                 });
 
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(12.0);
+                ui.add_space(10.0);
 
                 let list_h = (panel_h - 200.0).max(180.0);
                 egui::ScrollArea::vertical()
@@ -668,13 +700,21 @@ impl BonyBuildApp {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         match self.model.usage_tab {
+                            UsageTab::Charts => {
+                                // Chronological for charts (history_turns is oldest→newest).
+                                charts::draw_usage_charts(
+                                    ui,
+                                    &self.model.history_turns,
+                                    &model_stats,
+                                );
+                            }
                             UsageTab::Models => {
                                 if model_stats.is_empty() {
                                     empty_hint(ui, "还没有模型用量。发送一条消息后会出现在这里。");
                                 } else {
                                     for m in &model_stats {
-                                        let pct = if sess.total_tokens > 0 {
-                                            (m.total_tokens as f32 / sess.total_tokens as f32)
+                                        let pct = if chip_total > 0 {
+                                            (m.total_tokens as f32 / chip_total as f32)
                                                 .clamp(0.0, 1.0)
                                         } else if model_stats.len() == 1 {
                                             1.0
@@ -1383,11 +1423,13 @@ fn stat_chip(ui: &mut egui::Ui, label: &str, value: &str) {
         .fill(BG)
         .corner_radius(CornerRadius::same(10))
         .stroke(Stroke::new(1.0, BORDER))
-        .inner_margin(Margin::symmetric(12, 8))
+        .inner_margin(Margin::symmetric(14, 10))
         .show(ui, |ui| {
+            ui.set_min_width(72.0);
             ui.vertical(|ui| {
                 ui.label(RichText::new(label).size(11.0).color(MUTED));
-                ui.label(RichText::new(value).size(14.0).strong().color(TEXT));
+                ui.add_space(2.0);
+                ui.label(RichText::new(value).size(15.0).strong().color(TEXT));
             });
         });
 }

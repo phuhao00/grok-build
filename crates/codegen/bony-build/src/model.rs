@@ -47,6 +47,7 @@ pub struct PendingPermission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UsageTab {
     #[default]
+    Charts,
     Models,
     Turns,
 }
