@@ -1,5 +1,5 @@
 {
-  "generated_at": "SystemTime { intervals: 134287663797447214 }",
+  "generated_at": "SystemTime { intervals: 134289933404328702 }",
   "modules": [
     {
       "crate_name": "bony-build",
@@ -33,6 +33,11 @@
     },
     {
       "crate_name": "bony-build",
+      "path": "crates/codegen/bony-build/src/git_workspace.rs",
+      "stem": "git_workspace"
+    },
+    {
+      "crate_name": "bony-build",
       "path": "crates/codegen/bony-build/src/main.rs",
       "stem": "main"
     },
@@ -45,6 +50,11 @@
       "crate_name": "bony-build",
       "path": "crates/codegen/bony-build/src/model.rs",
       "stem": "model"
+    },
+    {
+      "crate_name": "bony-build",
+      "path": "crates/codegen/bony-build/src/task.rs",
+      "stem": "task"
     },
     {
       "crate_name": "bony-build",
@@ -80,6 +90,11 @@
       "crate_name": "bony-monitor",
       "path": "crates/codegen/bony-monitor/src/main.rs",
       "stem": "main"
+    },
+    {
+      "crate_name": "bony-monitor",
+      "path": "crates/codegen/bony-monitor/src/matrix.rs",
+      "stem": "matrix"
     },
     {
       "crate_name": "bony-monitor",

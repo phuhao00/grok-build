@@ -40,10 +40,7 @@ const RULES: &[Rule] = &[
     Rule {
         id: "desktop",
         label: "桌面客户端",
-        prefixes: &[
-            "crates/codegen/bony-build/",
-            "scripts/run-desktop.ps1",
-        ],
+        prefixes: &["crates/codegen/bony-build/", "scripts/run-desktop.ps1"],
         severity: "high",
         improvement: "改进桌面壳、对话、用量统计或项目工作区入口",
     },
@@ -93,7 +90,12 @@ const RULES: &[Rule] = &[
     Rule {
         id: "workspace",
         label: "构建 / Workspace",
-        prefixes: &["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "scripts/"],
+        prefixes: &[
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain.toml",
+            "scripts/",
+        ],
         severity: "medium",
         improvement: "调整依赖、工作区成员或开发脚本",
     },
@@ -151,25 +153,22 @@ pub fn analyze(
 
     for line in body.lines().chain(subject.lines()) {
         let t = line.trim();
-        if let Some(rest) = strip_prefix_ci(t, "Impact:")
-            .or_else(|| strip_prefix_ci(t, "影响:"))
+        if let Some(rest) = strip_prefix_ci(t, "Impact:").or_else(|| strip_prefix_ci(t, "影响:"))
         {
             let rest = rest.trim();
             if !rest.is_empty() {
                 improvements.push(rest.to_string());
             }
         }
-        if let Some(rest) = strip_prefix_ci(t, "Improvement:")
-            .or_else(|| strip_prefix_ci(t, "改进:"))
+        if let Some(rest) =
+            strip_prefix_ci(t, "Improvement:").or_else(|| strip_prefix_ci(t, "改进:"))
         {
             let rest = rest.trim();
             if !rest.is_empty() {
                 improvements.push(rest.to_string());
             }
         }
-        if let Some(rest) = strip_prefix_ci(t, "Risk:")
-            .or_else(|| strip_prefix_ci(t, "风险:"))
-        {
+        if let Some(rest) = strip_prefix_ci(t, "Risk:").or_else(|| strip_prefix_ci(t, "风险:")) {
             let rest = rest.trim();
             if !rest.is_empty() {
                 risks.push(rest.to_string());
@@ -223,12 +222,24 @@ pub fn analyze(
 }
 
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    if s.len() < prefix.len() {
-        return None;
-    }
-    if s[..prefix.len()].eq_ignore_ascii_case(prefix) {
-        Some(&s[prefix.len()..])
+    let head = s.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        s.get(prefix.len()..)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_prefix_ci;
+
+    #[test]
+    fn strip_prefix_is_safe_for_utf8_input() {
+        assert_eq!(strip_prefix_ci("当前未暂存修改", "Impact:"), None);
+        assert_eq!(
+            strip_prefix_ci("影响: 会话恢复", "影响:"),
+            Some(" 会话恢复")
+        );
     }
 }

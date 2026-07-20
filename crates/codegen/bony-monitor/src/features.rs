@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::catalog::{rule_covers_path, CatalogSnapshot};
+use crate::catalog::{CatalogSnapshot, rule_covers_path};
 use crate::git::ChangeEntry;
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,9 +185,7 @@ fn auto_feature_for_path(path: &str) -> Option<FeatureHit> {
         category: "自动发现".into(),
         severity: "medium".into(),
         why: format!("未覆盖路径：{norm}"),
-        user_impact: format!(
-            "新模块「{label}」尚未写入功能目录，请确认是否归入既有 feature"
-        ),
+        user_impact: format!("新模块「{label}」尚未写入功能目录，请确认是否归入既有 feature"),
     })
 }
 
@@ -232,7 +230,9 @@ pub fn match_dimensions(
                 | "usage-analytics"
         ) || f.id.starts_with("auto-")
     });
-    let has_sec = features.iter().any(|f| f.id == "auth-login" || f.id == "permissions")
+    let has_sec = features
+        .iter()
+        .any(|f| f.id == "auth-login" || f.id == "permissions")
         || joined.contains("auth")
         || joined.contains("secret");
 
@@ -247,7 +247,11 @@ pub fn match_dimensions(
         ));
     }
     if has_sec {
-        out.push(dim("security", "高", "认证或权限相关，需重点验证密钥与审批"));
+        out.push(dim(
+            "security",
+            "高",
+            "认证或权限相关，需重点验证密钥与审批",
+        ));
     }
     if features
         .iter()
@@ -278,7 +282,10 @@ pub fn match_dimensions(
     if text.contains("perf") || text.contains("性能") || text.contains("timeout") {
         out.push(dim("perf", "中", "提交提到性能/超时相关"));
     }
-    if features.iter().any(|f| f.id == "build-ci" || f.id == "monitor") {
+    if features
+        .iter()
+        .any(|f| f.id == "build-ci" || f.id == "monitor")
+    {
         out.push(dim("dx", "中", "构建脚本或监控变更，影响开发与发布效率"));
     }
     if features.iter().any(|f| f.id == "docs-product") {
@@ -328,13 +335,14 @@ pub fn analyze_features_full(
     for f in &features {
         checklist.push(format!("验证「{}」：{}", f.name, f.user_impact));
     }
-    if features.iter().any(|f| f.id == "chat" || f.id == "session-loop") {
+    if features
+        .iter()
+        .any(|f| f.id == "chat" || f.id == "session-loop")
+    {
         checklist.push("冒烟：启动桌面 → 发送一条消息 → 确认流式回复".into());
     }
     if features.iter().any(|f| f.id == "desktop-shell") {
-        checklist.push(
-            "冒烟：顶栏菜单/前进后退/关闭按钮清晰；侧栏入口可点；左右栏可开关".into(),
-        );
+        checklist.push("冒烟：顶栏菜单/前进后退/关闭按钮清晰；侧栏入口可点；左右栏可开关".into());
     }
     if features.iter().any(|f| f.id == "projects") {
         checklist.push("冒烟：打开项目选文件夹 → Agent 重连到新 cwd → 侧栏项目高亮".into());
@@ -354,7 +362,10 @@ pub fn analyze_features_full(
     if features.iter().any(|f| f.id == "auth-login") {
         checklist.push("冒烟：无凭证提示登录 / 有 Key 可直连".into());
     }
-    if features.iter().any(|f| f.id == "tools" || f.id == "permissions") {
+    if features
+        .iter()
+        .any(|f| f.id == "tools" || f.id == "permissions")
+    {
         checklist.push("冒烟：触发一次读文件或列目录工具".into());
     }
     if features.iter().any(|f| f.id.starts_with("auto-")) {
@@ -367,10 +378,7 @@ pub fn analyze_features_full(
     (features, dimensions, checklist)
 }
 
-pub fn features_overview(
-    catalog: &CatalogSnapshot,
-    changes: &[ChangeEntry],
-) -> FeaturesOverview {
+pub fn features_overview(catalog: &CatalogSnapshot, changes: &[ChangeEntry]) -> FeaturesOverview {
     let mut defs: Vec<FeatureDef> = catalog_defs(catalog);
     let mut seen: BTreeSet<String> = defs.iter().map(|d| d.id.clone()).collect();
 

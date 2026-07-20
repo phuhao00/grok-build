@@ -69,11 +69,22 @@
           <section class="panel full">
             <div class="panel-head">
               <div>
-                <h2>Feature impact</h2>
-                <p class="muted">Product capabilities touched by recent commits. Click a card to filter Changelog.</p>
+                <h2>Change × capability impact</h2>
+                <p class="muted">Working tree, staged changes, and recent commits. Color shows direction; intensity shows magnitude; dot shows validation.</p>
               </div>
             </div>
-            <div class="feature-grid" id="feature-grid"></div>
+            <div class="impact-selection" id="impact-selection" aria-live="polite">Select a cell to inspect its evidence.</div>
+            <div class="impact-scroll">
+              <table class="impact-matrix" id="impact-matrix" aria-label="Change by capability impact matrix"></table>
+            </div>
+            <div class="impact-legend" aria-label="Impact legend">
+              <span><i class="legend-mark improve">↑</i> evidence suggests improvement</span>
+              <span><i class="legend-mark regress">↓</i> regression risk</span>
+              <span><i class="legend-mark neutral">—</i> behavior-neutral</span>
+              <span><i class="legend-mark unknown">?</i> direction unknown</span>
+              <span><b>●</b> validation declared</span>
+              <span><b>○</b> unverified</span>
+            </div>
           </section>
 
           <section class="panel full">

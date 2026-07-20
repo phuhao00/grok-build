@@ -3,11 +3,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::catalog::CatalogSnapshot;
-use crate::impact::{analyze, ChangeImpact};
+use crate::impact::{ChangeImpact, analyze};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileStat {
@@ -38,7 +38,10 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
             return Ok(cur);
         }
         if !cur.pop() {
-            bail!("not inside a git repository (started at {})", start.display());
+            bail!(
+                "not inside a git repository (started at {})",
+                start.display()
+            );
         }
     }
 }
@@ -73,11 +76,103 @@ pub fn list_changes(
     parse_git_log(&text, catalog)
 }
 
-pub fn change_detail(
+/// Analyze the two mutable Git layers independently so the dashboard updates
+/// before a commit exists.
+pub fn working_changes(repo: &Path, catalog: &CatalogSnapshot) -> Result<Vec<ChangeEntry>> {
+    let mut out = Vec::new();
+    if let Some(staged) = working_change(repo, true, catalog)? {
+        out.push(staged);
+    }
+    if let Some(unstaged) = working_change(repo, false, catalog)? {
+        out.push(unstaged);
+    }
+    Ok(out)
+}
+
+fn working_change(
     repo: &Path,
-    sha: &str,
+    staged: bool,
     catalog: &CatalogSnapshot,
-) -> Result<ChangeEntry> {
+) -> Result<Option<ChangeEntry>> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo).args(["diff", "--numstat"]);
+    if staged {
+        command.arg("--cached");
+    }
+    let output = command.output().context("failed to read working diff")?;
+    if !output.status.success() {
+        bail!(
+            "git diff failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let mut files = parse_numstat(&String::from_utf8_lossy(&output.stdout));
+    if !staged {
+        let untracked = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["ls-files", "--others", "--exclude-standard", "-z"])
+            .output()
+            .context("failed to list untracked files")?;
+        for raw in untracked
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|v| !v.is_empty())
+        {
+            let path = String::from_utf8_lossy(raw).into_owned();
+            if !files.iter().any(|f| f.path == path) {
+                files.push(FileStat {
+                    path,
+                    additions: 0,
+                    deletions: 0,
+                });
+            }
+        }
+    }
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let additions = files.iter().map(|f| f.additions).sum();
+    let deletions = files.iter().map(|f| f.deletions).sum();
+    let paths: Vec<_> = files.iter().map(|f| f.path.clone()).collect();
+    let short_sha = if staged { "staged" } else { "unstaged" };
+    let subject = if staged {
+        "当前已暂存修改"
+    } else {
+        "当前未暂存修改"
+    };
+    Ok(Some(ChangeEntry {
+        sha: short_sha.into(),
+        short_sha: short_sha.into(),
+        subject: subject.into(),
+        body: String::new(),
+        author: "Working tree".into(),
+        email: String::new(),
+        date: String::new(),
+        additions,
+        deletions,
+        files,
+        impact: analyze(catalog, subject, "", &paths),
+    }))
+}
+
+fn parse_numstat(text: &str) -> Vec<FileStat> {
+    text.lines()
+        .filter_map(|line| {
+            let mut columns = line.splitn(3, '\t');
+            let additions = columns.next()?.parse().unwrap_or(0);
+            let deletions = columns.next()?.parse().unwrap_or(0);
+            let path = columns.next()?.to_string();
+            Some(FileStat {
+                path,
+                additions,
+                deletions,
+            })
+        })
+        .collect()
+}
+
+pub fn change_detail(repo: &Path, sha: &str, catalog: &CatalogSnapshot) -> Result<ChangeEntry> {
     let list = list_changes(repo, 200, catalog)?;
     list.into_iter()
         .find(|c| c.sha.starts_with(sha) || c.short_sha == sha)
@@ -164,5 +259,13 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x1fbbbbbbb\x1fAdd feature\x1fImpact: be
         assert_eq!(entries[0].subject, "Add feature");
         assert_eq!(entries[0].additions, 10);
         assert!(entries[0].impact.tags.iter().any(|t| t == "desktop"));
+    }
+
+    #[test]
+    fn parses_binary_and_text_numstat() {
+        let files = parse_numstat("12\t3\tsrc/app.rs\n-\t-\timage.png\n");
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].additions, 12);
+        assert_eq!(files[1].additions, 0);
     }
 }

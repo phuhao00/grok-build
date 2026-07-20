@@ -157,7 +157,9 @@ fn scenes() -> Vec<WorkflowScene> {
         WorkflowScene {
             id: "ask".into(),
             title: "分镜一 · 一次提问从进到出".into(),
-            summary: "桌面 UI → ACP → Session → Sampler → Tools → turns.jsonl，对照时序图与源码锚点。".into(),
+            summary:
+                "桌面 UI → ACP → Session → Sampler → Tools → turns.jsonl，对照时序图与源码锚点。"
+                    .into(),
             image: Some("/repo-docs/bony-build-desktop.png".into()),
             image_caption: Some("桌面端：对话、侧栏任务、模型选择与用量入口".into()),
             image_side: "right".into(),
@@ -299,7 +301,9 @@ fn scenes() -> Vec<WorkflowScene> {
         WorkflowScene {
             id: "turn".into(),
             title: "分镜二 · Agent turn 怎么转".into(),
-            summary: "Agent 只负责装配；SessionActor 才跑 loop。旁路含 memory / compaction / subagent。".into(),
+            summary:
+                "Agent 只负责装配；SessionActor 才跑 loop。旁路含 memory / compaction / subagent。"
+                    .into(),
             image: Some("/repo-docs/architecture-turn-flow.png".into()),
             image_caption: Some("Turn 流程：采样 → 工具 → 再采样".into()),
             image_side: "left".into(),
@@ -352,7 +356,9 @@ fn scenes() -> Vec<WorkflowScene> {
         WorkflowScene {
             id: "layers".into(),
             title: "分镜三 · 分层与 crate 地图".into(),
-            summary: "Host → Session → Agent / Sampler / Tools → Workspace；下方条形图来自实时扫描。".into(),
+            summary:
+                "Host → Session → Agent / Sampler / Tools → Workspace；下方条形图来自实时扫描。"
+                    .into(),
             image: Some("/repo-docs/architecture-layers.png".into()),
             image_caption: Some("分层架构总览（与 ARCHITECTURE.md 同源）".into()),
             image_side: "right".into(),
@@ -397,7 +403,9 @@ fn scenes() -> Vec<WorkflowScene> {
         WorkflowScene {
             id: "switch".into(),
             title: "分镜四 · 换项目 / 换模型 / 鉴权".into(),
-            summary: "cwd 与默认模型变更会重建 bridge；BYOK / cached token / grok.com 决定是否弹登录。".into(),
+            summary:
+                "cwd 与默认模型变更会重建 bridge；BYOK / cached token / grok.com 决定是否弹登录。"
+                    .into(),
             image: Some("/repo-docs/bony-build-desktop.png".into()),
             image_caption: Some("侧栏项目与底部模型选择器".into()),
             image_side: "left".into(),
@@ -450,7 +458,8 @@ fn scenes() -> Vec<WorkflowScene> {
         WorkflowScene {
             id: "monitor".into(),
             title: "分镜五 · 监控看板接到哪里".into(),
-            summary: "bony-monitor 不跑 agent；读 git + features.toml + 源码扫描，生成影响摘要。".into(),
+            summary: "bony-monitor 不跑 agent；读 git + features.toml + 源码扫描，生成影响摘要。"
+                .into(),
             image: None,
             image_caption: None,
             image_side: "right".into(),
@@ -671,7 +680,10 @@ fn build_charts(catalog: &CatalogSnapshot, code_map: &[CodeModule]) -> Vec<Workf
                 LayerBand {
                     name: "2 · Session".into(),
                     summary: "agentic turn 宿主".into(),
-                    items: vec!["xai-grok-shell · SessionActor".into(), "xai-chat-state".into()],
+                    items: vec![
+                        "xai-grok-shell · SessionActor".into(),
+                        "xai-chat-state".into(),
+                    ],
                 },
                 LayerBand {
                     name: "3a · Agent".into(),
@@ -775,8 +787,7 @@ fn build_charts(catalog: &CatalogSnapshot, code_map: &[CodeModule]) -> Vec<Workf
 fn build_code_map(catalog: &CatalogSnapshot) -> Vec<CodeModule> {
     let curated = curated_modules();
     let mut out = curated.clone();
-    let known: std::collections::HashSet<String> =
-        curated.iter().map(|m| m.path.clone()).collect();
+    let known: std::collections::HashSet<String> = curated.iter().map(|m| m.path.clone()).collect();
 
     for d in &catalog.discovered {
         if known.contains(&d.path) {

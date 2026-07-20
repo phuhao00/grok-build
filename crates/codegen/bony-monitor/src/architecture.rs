@@ -48,7 +48,8 @@ pub fn overview(catalog: &CatalogSnapshot) -> ArchitectureOverview {
 
     ArchitectureOverview {
         title: "Bony Build 架构".into(),
-        blurb: "Codex 式桌面壳经 ACP 驱动 grok agent stdio；目录与模块扫描会随工作区热更新。".into(),
+        blurb: "Codex 式桌面壳经 ACP 驱动 grok agent stdio；目录与模块扫描会随工作区热更新。"
+            .into(),
         layers: vec![
             ArchLayer {
                 id: "host".into(),

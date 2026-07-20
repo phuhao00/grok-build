@@ -5,6 +5,7 @@ mod catalog;
 mod features;
 mod git;
 mod impact;
+mod matrix;
 mod workflow;
 
 use std::net::SocketAddr;
@@ -26,7 +27,10 @@ use tracing_subscriber::EnvFilter;
 use crate::catalog::CatalogCache;
 
 #[derive(Debug, Parser)]
-#[command(name = "bony-monitor", about = "Bony Build architecture & change monitor")]
+#[command(
+    name = "bony-monitor",
+    about = "Bony Build architecture & change monitor"
+)]
 struct Args {
     /// Bind address (default 127.0.0.1:8787).
     #[arg(long, default_value = "127.0.0.1:8787")]
@@ -52,7 +56,9 @@ struct AppState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_target(false)
         .init();
 
@@ -84,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/architecture", get(api_architecture))
         .route("/api/workflow", get(api_workflow))
         .route("/api/features", get(api_features))
+        .route("/api/impact-matrix", get(api_impact_matrix))
         .route("/api/changes", get(api_changes))
         .route("/api/changes/{sha}", get(api_change_detail))
         .nest_service("/repo-docs", ServeDir::new(docs_dir))
@@ -125,10 +132,11 @@ async fn index(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn api_overview(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn api_overview(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let catalog = state.catalog.snapshot();
-    let changes =
-        git::list_changes(&state.repo, state.limit, &catalog).map_err(ApiError::from)?;
+    let changes = git::list_changes(&state.repo, state.limit, &catalog).map_err(ApiError::from)?;
     let arch = architecture::overview(&catalog);
     let mut area_counts: std::collections::BTreeMap<String, u64> =
         std::collections::BTreeMap::new();
@@ -173,9 +181,7 @@ async fn api_architecture(
     Json(architecture::overview(&catalog))
 }
 
-async fn api_workflow(
-    State(state): State<Arc<AppState>>,
-) -> Json<workflow::WorkflowOverview> {
+async fn api_workflow(State(state): State<Arc<AppState>>) -> Json<workflow::WorkflowOverview> {
     let catalog = state.catalog.snapshot();
     Json(workflow::overview(&catalog))
 }
@@ -184,9 +190,17 @@ async fn api_features(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<features::FeaturesOverview>, ApiError> {
     let catalog = state.catalog.snapshot();
-    let changes =
-        git::list_changes(&state.repo, state.limit, &catalog).map_err(ApiError::from)?;
+    let changes = git::list_changes(&state.repo, state.limit, &catalog).map_err(ApiError::from)?;
     Ok(Json(features::features_overview(&catalog, &changes)))
+}
+
+async fn api_impact_matrix(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<matrix::ImpactMatrix>, ApiError> {
+    let catalog = state.catalog.snapshot();
+    Ok(Json(
+        matrix::build(&state.repo, 10, &catalog).map_err(ApiError::from)?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,8 +215,7 @@ async fn api_changes(
 ) -> Result<Json<Vec<git::ChangeEntry>>, ApiError> {
     let catalog = state.catalog.snapshot();
     let limit = q.limit.unwrap_or(state.limit).clamp(1, 300);
-    let mut changes =
-        git::list_changes(&state.repo, limit, &catalog).map_err(ApiError::from)?;
+    let mut changes = git::list_changes(&state.repo, limit, &catalog).map_err(ApiError::from)?;
     if let Some(tag) = q.tag {
         changes.retain(|c| c.impact.tags.iter().any(|t| t == &tag));
     }
@@ -214,8 +227,7 @@ async fn api_change_detail(
     Path(sha): Path<String>,
 ) -> Result<Json<git::ChangeEntry>, ApiError> {
     let catalog = state.catalog.snapshot();
-    let detail =
-        git::change_detail(&state.repo, &sha, &catalog).map_err(ApiError::from)?;
+    let detail = git::change_detail(&state.repo, &sha, &catalog).map_err(ApiError::from)?;
     Ok(Json(detail))
 }
 

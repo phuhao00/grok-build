@@ -77,7 +77,9 @@ pub fn rule_covers_path(f: &FeatureRule, path: &str) -> bool {
     f.paths
         .iter()
         .any(|p| path.starts_with(p.as_str()) || path == p.as_str())
-        || f.names.iter().any(|n| path_l.contains(&n.to_ascii_lowercase()))
+        || f.names
+            .iter()
+            .any(|n| path_l.contains(&n.to_ascii_lowercase()))
 }
 
 pub struct CatalogCache {
@@ -113,11 +115,7 @@ impl CatalogCache {
 
     pub fn snapshot(&self) -> CatalogSnapshot {
         self.ensure_fresh();
-        self.inner
-            .read()
-            .expect("catalog lock")
-            .snapshot
-            .clone()
+        self.inner.read().expect("catalog lock").snapshot.clone()
     }
 
     pub fn ensure_fresh(&self) {
@@ -126,7 +124,9 @@ impl CatalogCache {
 
         let needs = {
             let guard = self.inner.read().expect("catalog lock");
-            guard.toml_mtime != toml_m || guard.scan_mtime != scan_m || guard.snapshot.rules.is_empty()
+            guard.toml_mtime != toml_m
+                || guard.scan_mtime != scan_m
+                || guard.snapshot.rules.is_empty()
         };
         if !needs {
             return;
@@ -174,8 +174,7 @@ fn load_snapshot(repo: &Path, features_toml: &Path, catalog_dir: &Path) -> Resul
 }
 
 fn load_features_toml(path: &Path) -> Result<Vec<FeatureRule>> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let file: FeaturesFile = toml::from_str(&text).context("parse features.toml")?;
     Ok(file
         .features

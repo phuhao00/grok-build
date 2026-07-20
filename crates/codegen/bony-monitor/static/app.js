@@ -1,6 +1,7 @@
 const state = {
   changes: [],
   features: null,
+  impactMatrix: null,
   workflow: null,
   tag: "all",
   search: "",
@@ -97,14 +98,13 @@ function setPage(page) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function renderStats(overview) {
+function renderStats(overview, matrix) {
   const el = document.getElementById("stats");
   el.innerHTML = [
-    ["Commits", overview.commit_count],
-    ["Additions", overview.additions],
-    ["Deletions", overview.deletions],
-    ["Features hit", overview.features_touched],
-    ["Catalog", overview.features_total],
+    ["Changes shown", matrix?.changes?.length ?? overview.commit_count],
+    ["Capabilities hit", matrix?.capabilities?.length ?? overview.features_touched],
+    ["High risk unverified", matrix?.unverified_high ?? 0],
+    ["Direction unknown", matrix?.unknown_direction ?? 0],
   ]
     .map(
       ([label, value]) => `
@@ -123,32 +123,48 @@ function renderStats(overview) {
   `;
 }
 
-function renderFeatureMatrix(features) {
-  const el = document.getElementById("feature-grid");
-  el.innerHTML = (features.activity || [])
-    .map((a) => {
-      const f = a.feature;
-      const last = a.commit_count
-        ? `${escapeHtml(a.last_sha)} · ${escapeHtml(a.last_subject)}`
-        : "No recent activity";
-      return `
-        <article class="feat ${escapeHtml(a.heat)}" data-feature="${escapeHtml(
-          f.id
-        )}" tabindex="0" role="button">
-          <div class="feat-top">
-            <h3>${escapeHtml(f.name)}</h3>
-            <span class="heat">${escapeHtml(a.heat)} · ${a.commit_count} commits</span>
-          </div>
-          <div class="cat">${escapeHtml(f.category)}${f.user_facing ? " · user-facing" : " · internal"}</div>
-          <p>${escapeHtml(f.description)}</p>
-          <div class="feat-meta">
-            <span class="add">+${a.additions}</span>
-            <span class="del">-${a.deletions}</span>
-            · ${last}
-          </div>
-        </article>`;
-    })
-    .join("");
+function renderImpactMatrix(matrix) {
+  const table = document.getElementById("impact-matrix");
+  const changes = matrix?.changes || [];
+  const capabilities = matrix?.capabilities || [];
+  const cells = new Map((matrix?.cells || []).map((c) => [`${c.capability_id}:${c.change_id}`, c]));
+  const glyph = { improve: "↑", regress: "↓", neutral: "—", unknown: "?" };
+  const head = `<thead><tr><th scope="col">Capability</th>${changes.map((c) => `
+    <th scope="col" title="${escapeHtml(c.subject)}">
+      <span>${escapeHtml(c.label)}</span>
+      <small>${c.file_count} files · +${c.additions}/-${c.deletions}</small>
+    </th>`).join("")}</tr></thead>`;
+  const body = `<tbody>${capabilities.map((cap) => `<tr>
+    <th scope="row"><span>${escapeHtml(cap.name)}</span><small>${escapeHtml(cap.category)}</small></th>
+    ${changes.map((change) => {
+      const cell = cells.get(`${cap.id}:${change.id}`);
+      if (!cell) return `<td><span class="impact-empty" aria-label="No detected impact">·</span></td>`;
+      const label = `${cap.name}; ${change.label}; ${cell.direction}; ${cell.magnitude}; ${cell.confidence} confidence; ${cell.validation}`;
+      return `<td><button type="button" class="impact-cell ${escapeHtml(cell.direction)} ${escapeHtml(cell.magnitude)}" data-change="${escapeHtml(change.id)}" data-capability="${escapeHtml(cap.id)}" aria-label="${escapeHtml(label)}">
+        <span>${glyph[cell.direction] || "?"}</span><small>${cell.validation === "declared" ? "●" : "○"}</small>
+      </button></td>`;
+    }).join("")}
+  </tr>`).join("")}</tbody>`;
+  table.innerHTML = head + body;
+  const first = (matrix?.cells || [])[0];
+  if (first) renderImpactSelection(first.change_id, first.capability_id);
+  else document.getElementById("impact-selection").textContent = "No capability impact detected in the selected changes.";
+}
+
+function renderImpactSelection(changeId, capabilityId) {
+  const matrix = state.impactMatrix;
+  const cell = (matrix?.cells || []).find((c) => c.change_id === changeId && c.capability_id === capabilityId);
+  const change = (matrix?.changes || []).find((c) => c.id === changeId);
+  const cap = (matrix?.capabilities || []).find((c) => c.id === capabilityId);
+  if (!cell || !change || !cap) return;
+  const checks = (cell.checklist || []).slice(0, 3).map((v) => `<li>${escapeHtml(v)}</li>`).join("");
+  document.getElementById("impact-selection").innerHTML = `
+    <div><strong>${escapeHtml(cap.name)}</strong> × <code>${escapeHtml(change.label)}</code>
+      <span class="impact-badge ${escapeHtml(cell.direction)}">${escapeHtml(cell.direction)}</span>
+      <span class="impact-badge">${escapeHtml(cell.magnitude)} · ${escapeHtml(cell.confidence)} confidence</span>
+    </div>
+    <div class="impact-evidence">${escapeHtml(cell.why)} · ${escapeHtml(cell.user_effect)}</div>
+    ${checks ? `<ul>${checks}</ul>` : `<div class="impact-evidence">No validation evidence declared.</div>`}`;
 }
 
 function goFeatureFilter(featureId) {
@@ -888,19 +904,21 @@ function closeDrawer() {
 }
 
 async function refreshAll({ silent } = { silent: false }) {
-  const [overview, arch, changes, features, workflow] = await Promise.all([
+  const [overview, arch, changes, features, workflow, impactMatrix] = await Promise.all([
     fetchJson("/api/overview"),
     fetchJson("/api/architecture"),
     fetchJson("/api/changes?limit=80"),
     fetchJson("/api/features"),
     fetchJson("/api/workflow"),
+    fetchJson("/api/impact-matrix"),
   ]);
 
   state.changes = changes;
   state.features = features;
   state.workflow = workflow;
-  renderStats(overview);
-  renderFeatureMatrix(features);
+  state.impactMatrix = impactMatrix;
+  renderStats(overview, impactMatrix);
+  renderImpactMatrix(impactMatrix);
   renderArchitecture(arch);
   renderWorkflow(workflow);
   renderFilters();
@@ -958,16 +976,11 @@ function bindUiOnce() {
   });
 
   // Event delegation — survives auto-refresh re-renders.
-  document.getElementById("feature-grid")?.addEventListener("click", (e) => {
-    const card = e.target.closest(".feat");
-    if (card?.dataset.feature) goFeatureFilter(card.dataset.feature);
-  });
-  document.getElementById("feature-grid")?.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    const card = e.target.closest(".feat");
-    if (!card?.dataset.feature) return;
-    e.preventDefault();
-    goFeatureFilter(card.dataset.feature);
+  document.getElementById("impact-matrix")?.addEventListener("click", (e) => {
+    const cell = e.target.closest(".impact-cell");
+    if (cell?.dataset.change && cell?.dataset.capability) {
+      renderImpactSelection(cell.dataset.change, cell.dataset.capability);
+    }
   });
 
   document.getElementById("timeline")?.addEventListener("click", (e) => {

@@ -370,6 +370,89 @@ img { -webkit-user-drag: none; }
   font-family: var(--mono);
 }
 
+/* Change × capability matrix */
+.impact-selection {
+  margin: 14px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-s);
+  background: var(--fill);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.impact-selection code { font-family: var(--mono); color: var(--text-2); }
+.impact-selection ul { margin: 7px 0 0 18px; padding: 0; color: var(--text-2); }
+.impact-evidence { margin-top: 5px; color: var(--text-2); }
+.impact-badge {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: var(--fill-2);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.impact-badge.improve { color: var(--ok); }
+.impact-badge.regress { color: var(--danger); }
+.impact-scroll { overflow-x: auto; padding-bottom: 4px; }
+.impact-matrix {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: separate;
+  border-spacing: 4px;
+  table-layout: fixed;
+}
+.impact-matrix th,
+.impact-matrix td { padding: 0; text-align: center; }
+.impact-matrix thead th {
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  vertical-align: bottom;
+  overflow: hidden;
+}
+.impact-matrix thead th:first-child { width: 170px; text-align: left; }
+.impact-matrix thead th:not(:first-child) { width: 66px; }
+.impact-matrix th span,
+.impact-matrix th small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.impact-matrix th small { margin-top: 3px; color: var(--text-3); font-size: 9px; font-weight: 400; }
+.impact-matrix tbody th { text-align: left; padding-right: 8px; color: var(--text); font-size: 12px; font-weight: 500; }
+.impact-cell {
+  appearance: none;
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--text);
+  background: var(--fill);
+  transition: transform 140ms var(--ease), border-color 140ms var(--ease);
+}
+.impact-cell:hover { transform: translateY(-1px); border-color: var(--text-3); }
+.impact-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.impact-cell span { font-size: 16px; }
+.impact-cell small { font-size: 8px; color: currentColor; }
+.impact-cell.improve { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.impact-cell.regress { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.impact-cell.neutral { background: var(--fill-2); color: var(--text-2); }
+.impact-cell.unknown { background: color-mix(in srgb, var(--warn) 13%, transparent); color: var(--warn); }
+.impact-cell.low { opacity: 0.62; }
+.impact-cell.medium { opacity: 0.82; }
+.impact-cell.high { opacity: 1; }
+.impact-empty { color: var(--text-3); }
+.impact-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; color: var(--text-3); font-size: 10px; }
+.legend-mark { font-style: normal; font-size: 13px; }
+.legend-mark.improve { color: var(--ok); }
+.legend-mark.regress { color: var(--danger); }
+.legend-mark.neutral { color: var(--text-2); }
+.legend-mark.unknown { color: var(--warn); }
+
 /* —— Architecture —— */
 .layers {
   display: grid;
