@@ -6,8 +6,10 @@ mod charts;
 mod config_io;
 mod events;
 mod fonts;
+mod git_workspace;
 mod markdown;
 mod model;
+mod task;
 mod usage;
 
 use std::path::PathBuf;
@@ -15,14 +17,11 @@ use std::path::PathBuf;
 use clap::Parser;
 use eframe::egui;
 
-use crate::agent_bridge::{resolve_grok_bin, BridgeConfig};
+use crate::agent_bridge::{BridgeConfig, resolve_grok_bin};
 use crate::app::BonyBuildApp;
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "bony-build",
-    about = "Native desktop client for Bony Build"
-)]
+#[command(name = "bony-build", about = "Native desktop client for Bony Build")]
 struct Args {
     /// Working directory for the agent session (default: current directory).
     #[arg(long)]
@@ -34,7 +33,7 @@ struct Args {
 
     /// Require manual approval for tool permissions (default: auto-approve).
     #[arg(long = "ask-permissions")]
-    ask_permissions: bool,
+    _ask_permissions: bool,
 }
 
 fn main() -> eframe::Result<()> {
@@ -55,8 +54,9 @@ fn main() -> eframe::Result<()> {
     let config = BridgeConfig {
         grok_bin,
         cwd,
-        // Default auto-approve so chat/tools feel interactive out of the box.
-        always_approve: !args.ask_permissions,
+        // Safe desktop default: all requested mutations are surfaced in the timeline.
+        always_approve: false,
+        resume_session_id: None,
     };
 
     let native = eframe::NativeOptions {

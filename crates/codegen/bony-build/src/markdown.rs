@@ -94,7 +94,9 @@ fn ordered_prefix(line: &str) -> Option<(&str, &str)> {
         return None;
     }
     let (num, rest) = line.split_at(digit_len);
-    let rest = rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))?;
+    let rest = rest
+        .strip_prefix(". ")
+        .or_else(|| rest.strip_prefix(") "))?;
     Some((num, rest))
 }
 
@@ -262,7 +264,9 @@ fn looks_like_path(s: &str) -> bool {
         return false;
     }
     // Prefer real paths; allow extension-only short names like `app.rs`.
-    s.contains('/') || s.contains('\\') || (s.contains('.') && !s.chars().all(|c| c.is_ascii_hexdigit() || c == '.'))
+    s.contains('/')
+        || s.contains('\\')
+        || (s.contains('.') && !s.chars().all(|c| c.is_ascii_hexdigit() || c == '.'))
 }
 
 fn render_inline_spans(ui: &mut egui::Ui, text: &str, body: Color32, size: f32, row_width: f32) {

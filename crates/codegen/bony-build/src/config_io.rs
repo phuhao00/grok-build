@@ -134,7 +134,9 @@ fn parse_models_catalog(text: &str) -> ConfigModels {
 fn trim_toml_string(value: &str) -> String {
     let v = value.trim();
     if (v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')) {
-        return v[1..v.len() - 1].replace("\\\"", "\"").replace("\\\\", "\\");
+        return v[1..v.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
     }
     // Strip inline comments for bare values.
     v.split('#').next().unwrap_or(v).trim().to_string()
@@ -262,10 +264,7 @@ fn find_default_line(section: &str) -> Option<(usize, usize)> {
     let mut offset = 0usize;
     for line in section.split_inclusive('\n') {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("default")
-            && trimmed.contains('=')
-            && !trimmed.starts_with('#')
-        {
+        if trimmed.starts_with("default") && trimmed.contains('=') && !trimmed.starts_with('#') {
             let start = offset + (line.len() - line.trim_start().len());
             let end = offset + line.trim_end_matches(['\r', '\n']).len();
             return Some((start, end));

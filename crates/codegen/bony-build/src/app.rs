@@ -2,14 +2,18 @@
 
 use std::sync::mpsc;
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, Frame, Margin, RichText, Shadow, Stroke, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, CornerRadius, Frame, Margin, RichText, Shadow, Stroke, Vec2,
+};
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::agent_bridge::{self, BridgeConfig};
 use crate::charts;
-use crate::events::{AgentEvent, UiCommand};
+use crate::events::{AgentEvent, AttachmentPayload, UiCommand};
+use crate::git_workspace::{ChangeKind, FileChange, GitWorkspaceService};
 use crate::markdown;
 use crate::model::{AppModel, MainNav, Role, TimelineItem, UsageTab};
+use crate::task::{SqliteTaskRepository, TaskRepository, TaskState, TaskStatus, unix_time};
 use crate::usage::{aggregate_model_usage, format_tokens, remember_project};
 
 const BG: Color32 = Color32::from_rgb(22, 22, 24);
@@ -47,13 +51,66 @@ pub struct BonyBuildApp {
     cmd_tx: Option<tokio_mpsc::UnboundedSender<UiCommand>>,
     started: bool,
     config: BridgeConfig,
+    task_repo: Option<SqliteTaskRepository>,
+    tasks: Vec<TaskState>,
+    active_task_id: Option<String>,
+    attachments: Vec<AttachmentPayload>,
+    changes: Vec<FileChange>,
+    selected_diff: Option<(std::path::PathBuf, String)>,
+    task_error: Option<String>,
+    pending_git_action: Option<(bool, std::path::PathBuf)>,
 }
 
 impl BonyBuildApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, config: BridgeConfig) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, mut config: BridgeConfig) -> Self {
         crate::fonts::install(&cc.egui_ctx);
         configure_style(&cc.egui_ctx);
         let (event_tx, event_rx) = mpsc::channel();
+        let task_repo = SqliteTaskRepository::open_default().ok();
+        let mut tasks = task_repo
+            .as_ref()
+            .and_then(|r| r.list(false).ok())
+            .unwrap_or_default();
+        let mut active = tasks
+            .iter()
+            .find(|t| t.project_path == config.cwd && t.session_id.is_some())
+            .cloned();
+        let mut init_error = None;
+        if active.is_none() {
+            let project = GitWorkspaceService::primary_repo_root(&config.cwd)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| config.cwd.clone());
+            let mut task = TaskState::draft(project.clone(), String::new());
+            match GitWorkspaceService::create_worktree(&project, &task.id, &task.title) {
+                Ok(worktree) => {
+                    task.worktree_path = worktree.path;
+                    task.branch = Some(worktree.branch);
+                    task.isolated = true;
+                }
+                Err(e)
+                    if GitWorkspaceService::repo_root(&project)
+                        .ok()
+                        .flatten()
+                        .is_some() =>
+                {
+                    init_error = Some(format!(
+                        "初始任务无法创建 worktree：{e}。当前任务使用共享目录，发送前请确认。"
+                    ))
+                }
+                Err(_) => {}
+            }
+            if let Some(repo) = &task_repo {
+                let _ = repo.save(&task);
+            }
+            tasks.insert(0, task.clone());
+            active = Some(task);
+        }
+        if let Some(task) = active.as_ref() {
+            config.cwd = task.worktree_path.clone();
+            config.resume_session_id = task.session_id.clone();
+        }
+        let active_task_id = active.as_ref().map(|t| t.id.clone());
         Self {
             model: AppModel::new(config.cwd.clone()),
             event_rx,
@@ -61,6 +118,14 @@ impl BonyBuildApp {
             cmd_tx: None,
             started: false,
             config,
+            task_repo,
+            tasks,
+            active_task_id,
+            attachments: Vec::new(),
+            changes: Vec::new(),
+            selected_diff: None,
+            task_error: init_error,
+            pending_git_action: None,
         }
     }
 
@@ -90,6 +155,8 @@ impl BonyBuildApp {
         self.send_cmd(UiCommand::Shutdown);
         self.cmd_tx = None;
         self.config.cwd = path.clone();
+        self.config.resume_session_id = None;
+        self.active_task_id = None;
         remember_project(&mut self.model.recent_projects, &path);
         self.model.cwd = Some(path);
         self.model.connected = false;
@@ -121,8 +188,102 @@ impl BonyBuildApp {
 
     fn drain_events(&mut self) {
         while let Ok(ev) = self.event_rx.try_recv() {
+            self.persist_event(&ev);
             self.model.apply(ev);
         }
+    }
+
+    fn persist_event(&mut self, event: &AgentEvent) {
+        let Some(id) = self.active_task_id.clone() else {
+            return;
+        };
+        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+            return;
+        };
+        match event {
+            AgentEvent::Connected {
+                session_id,
+                current_model_id,
+                restored,
+                ..
+            } => {
+                task.session_id = Some(session_id.clone());
+                task.model_id = current_model_id.clone();
+                task.status = TaskStatus::Draft;
+                if *restored {
+                    self.model.status = "会话已恢复".into();
+                }
+            }
+            AgentEvent::PermissionRequest { .. } => task.status = TaskStatus::WaitingApproval,
+            AgentEvent::TurnDone { .. } => {
+                task.status = TaskStatus::Completed;
+                self.changes =
+                    GitWorkspaceService::changes(&task.worktree_path).unwrap_or_default();
+            }
+            AgentEvent::Error(_) => task.status = TaskStatus::Failed,
+            _ => return,
+        }
+        task.updated_at = unix_time();
+        if let Some(repo) = &self.task_repo {
+            let _ = repo.save(task);
+        }
+    }
+
+    fn create_task(&mut self, ctx: &egui::Context) {
+        let project = self
+            .model
+            .cwd
+            .clone()
+            .unwrap_or_else(|| self.config.cwd.clone());
+        let project = GitWorkspaceService::primary_repo_root(&project)
+            .ok()
+            .flatten()
+            .unwrap_or(project);
+        let mut task = TaskState::draft(project.clone(), self.model.current_model_id.clone());
+        match GitWorkspaceService::create_worktree(&project, &task.id, &task.title) {
+            Ok(w) => {
+                task.worktree_path = w.path;
+                task.branch = Some(w.branch);
+                task.isolated = true;
+            }
+            Err(e)
+                if GitWorkspaceService::repo_root(&project)
+                    .ok()
+                    .flatten()
+                    .is_some() =>
+            {
+                self.task_error = Some(format!(
+                    "无法创建隔离 worktree：{e}\n任务未创建，避免静默共享工作目录。"
+                ));
+                return;
+            }
+            Err(_) => {}
+        }
+        if let Some(repo) = &self.task_repo {
+            if let Err(e) = repo.save(&task) {
+                self.task_error = Some(e);
+                return;
+            }
+        }
+        self.tasks.insert(0, task.clone());
+        self.activate_task(ctx, task);
+    }
+
+    fn activate_task(&mut self, ctx: &egui::Context, task: TaskState) {
+        self.send_cmd(UiCommand::Shutdown);
+        self.cmd_tx = None;
+        self.active_task_id = Some(task.id.clone());
+        self.config.cwd = task.worktree_path.clone();
+        self.config.resume_session_id = task.session_id.clone();
+        self.model = AppModel::new(task.worktree_path.clone());
+        self.model.task_title = task.title;
+        self.attachments.clear();
+        self.changes.clear();
+        self.selected_diff = None;
+        let tx =
+            agent_bridge::spawn_bridge(self.config.clone(), ctx.clone(), self.event_tx.clone());
+        self.cmd_tx = Some(tx);
+        self.started = true;
     }
 
     fn send_cmd(&self, cmd: UiCommand) {
@@ -133,12 +294,80 @@ impl BonyBuildApp {
 
     fn send_prompt(&mut self) {
         let text = self.model.draft.trim().to_string();
-        if text.is_empty() || self.model.busy || self.model.needs_login || !self.model.connected {
+        if (text.is_empty() && self.attachments.is_empty())
+            || self.model.busy
+            || self.model.needs_login
+            || !self.model.connected
+        {
             return;
         }
+        if let Some(id) = self.active_task_id.clone()
+            && let Some(task) = self.tasks.iter_mut().find(|t| t.id == id)
+        {
+            if task.title == "新任务" && !text.is_empty() {
+                task.title = text.chars().take(42).collect();
+                self.model.task_title = task.title.clone();
+            }
+            task.status = TaskStatus::Running;
+            task.updated_at = unix_time();
+            if let Some(repo) = &self.task_repo {
+                let _ = repo.save(task);
+            }
+        }
         self.model.draft.clear();
-        self.model.push_user(text.clone());
-        self.send_cmd(UiCommand::Prompt(text));
+        self.model.push_user(if text.is_empty() {
+            format!("已附加 {} 个文件", self.attachments.len())
+        } else {
+            text.clone()
+        });
+        let attachments = std::mem::take(&mut self.attachments);
+        self.send_cmd(UiCommand::Prompt { text, attachments });
+    }
+
+    fn pick_attachments(&mut self) {
+        let Some(paths) = rfd::FileDialog::new()
+            .set_title("添加上下文文件")
+            .pick_files()
+        else {
+            return;
+        };
+        for path in paths {
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            if meta.len() > 10 * 1024 * 1024 {
+                self.task_error = Some(format!("附件超过 10 MB：{}", path.display()));
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|v| v.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let mime = match ext.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "txt" | "md" | "rs" | "toml" | "json" | "yaml" | "yml" | "js" | "ts" | "tsx"
+                | "jsx" | "py" | "go" | "java" | "c" | "cpp" | "h" => "text/plain",
+                _ => {
+                    self.task_error = Some(format!("暂不支持的附件类型：{}", path.display()));
+                    continue;
+                }
+            };
+            if let Ok(data) = std::fs::read(&path) {
+                self.attachments.push(AttachmentPayload {
+                    name: path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    mime_type: mime.into(),
+                    data,
+                });
+            }
+        }
     }
 
     fn send_starter(&mut self, text: &str) {
@@ -147,7 +376,10 @@ impl BonyBuildApp {
         }
         self.model.draft.clear();
         self.model.push_user(text.to_string());
-        self.send_cmd(UiCommand::Prompt(text.to_string()));
+        self.send_cmd(UiCommand::Prompt {
+            text: text.to_string(),
+            attachments: Vec::new(),
+        });
     }
 }
 
@@ -166,16 +398,12 @@ impl eframe::App for BonyBuildApp {
             egui::SidePanel::left("codex_sidebar")
                 .exact_width(SIDEBAR_W)
                 .resizable(false)
-                .frame(
-                    Frame::NONE
-                        .fill(SIDEBAR)
-                        .inner_margin(Margin {
-                            left: 12,
-                            right: 12,
-                            top: 10,
-                            bottom: 12,
-                        }),
-                )
+                .frame(Frame::NONE.fill(SIDEBAR).inner_margin(Margin {
+                    left: 12,
+                    right: 12,
+                    top: 10,
+                    bottom: 12,
+                }))
                 .show(ctx, |ui| {
                     self.sidebar(ui, ctx);
                 });
@@ -197,8 +425,8 @@ impl eframe::App for BonyBuildApp {
         }
 
         let on_chat = self.model.main_nav == MainNav::Chat;
-        let show_task_title = on_chat
-            && (!self.model.is_empty_chat() || self.model.is_viewing_history());
+        let show_task_title =
+            on_chat && (!self.model.is_empty_chat() || self.model.is_viewing_history());
 
         egui::CentralPanel::default()
             .frame(Frame::NONE.fill(BG).inner_margin(Margin::symmetric(0, 0)))
@@ -249,9 +477,7 @@ impl eframe::App for BonyBuildApp {
                                     ui.add_space(8.0);
                                     ui.horizontal(|ui| {
                                         ui.spinner();
-                                        ui.label(
-                                            RichText::new("处理中…").size(12.5).color(MUTED),
-                                        );
+                                        ui.label(RichText::new("处理中…").size(12.5).color(MUTED));
                                     });
                                 }
                                 ui.add_space(20.0);
@@ -275,6 +501,8 @@ impl eframe::App for BonyBuildApp {
         self.permission_modal(ctx);
         self.model_picker_modal(ctx);
         self.about_modal(ctx);
+        self.task_error_modal(ctx);
+        self.git_confirmation_modal(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -287,16 +515,12 @@ impl BonyBuildApp {
     fn title_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("title_bar")
             .exact_height(TITLE_BAR_H)
-            .frame(
-                Frame::NONE
-                    .fill(SIDEBAR)
-                    .inner_margin(Margin {
-                        left: 8,
-                        right: 0,
-                        top: 0,
-                        bottom: 0,
-                    }),
-            )
+            .frame(Frame::NONE.fill(SIDEBAR).inner_margin(Margin {
+                left: 8,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            }))
             .show(ctx, |ui| {
                 let full = ui.max_rect();
                 ui.painter()
@@ -321,18 +545,15 @@ impl BonyBuildApp {
                         ui.add_space(8.0);
                         ui.spacing_mut().button_padding = Vec2::new(6.0, 2.0);
                         ui.visuals_mut().button_frame = false;
-                        for (label, build) in [
-                            ("文件", 0u8),
-                            ("编辑", 1u8),
-                            ("视图", 2u8),
-                            ("帮助", 3u8),
-                        ] {
+                        for (label, build) in
+                            [("文件", 0u8), ("编辑", 1u8), ("视图", 2u8), ("帮助", 3u8)]
+                        {
                             ui.menu_button(RichText::new(label).size(13.0).color(MUTED), |ui| {
                                 ui.visuals_mut().button_frame = true;
                                 match build {
                                     0 => {
                                         if ui.button("新建任务").clicked() {
-                                            self.model.new_task();
+                                            self.create_task(ctx);
                                             ui.close_menu();
                                         }
                                         if ui.button("打开项目…").clicked() {
@@ -397,8 +618,7 @@ impl BonyBuildApp {
                             if win_chrome_btn(ui, WinChrome::Close) {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
-                            let maximized =
-                                ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                            let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
                             if win_chrome_btn(
                                 ui,
                                 if maximized {
@@ -407,9 +627,7 @@ impl BonyBuildApp {
                                     WinChrome::Maximize
                                 },
                             ) {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
-                                    !maximized,
-                                ));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                             }
                             if win_chrome_btn(ui, WinChrome::Minimize) {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -443,9 +661,7 @@ impl BonyBuildApp {
                             if drag_resp.double_clicked() {
                                 let maximized =
                                     ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
-                                    !maximized,
-                                ));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                             }
                         });
                     },
@@ -455,12 +671,7 @@ impl BonyBuildApp {
 
     fn sidebar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Bony Build")
-                    .size(16.0)
-                    .strong()
-                    .color(TEXT),
-            );
+            ui.label(RichText::new("Bony Build").size(16.0).strong().color(TEXT));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let search_on = self.model.show_task_search;
                 if search_icon_btn(ui, search_on) {
@@ -485,31 +696,7 @@ impl BonyBuildApp {
         ui.add_space(12.0);
 
         if nav_item(ui, "＋  新建任务", false) {
-            self.model.new_task();
-        }
-        ui.add_space(2.0);
-        if nav_item(
-            ui,
-            "⏱  已安排",
-            self.model.main_nav == MainNav::Scheduled,
-        ) {
-            self.model.main_nav = MainNav::Scheduled;
-        }
-        ui.add_space(2.0);
-        if nav_item(ui, "@  插件", self.model.main_nav == MainNav::Plugins) {
-            self.model.main_nav = MainNav::Plugins;
-        }
-        ui.add_space(2.0);
-        if nav_item(ui, "▦  站点", self.model.main_nav == MainNav::Sites) {
-            self.model.main_nav = MainNav::Sites;
-        }
-        ui.add_space(2.0);
-        if nav_item(
-            ui,
-            "⎇  拉取请求",
-            self.model.main_nav == MainNav::PullRequests,
-        ) {
-            self.model.main_nav = MainNav::PullRequests;
+            self.create_task(ctx);
         }
         ui.add_space(2.0);
         let chat_selected =
@@ -561,9 +748,14 @@ impl BonyBuildApp {
         ui.label(RichText::new("任务").size(12.0).color(MUTED));
         ui.add_space(6.0);
 
-        let tasks = self.model.filtered_tasks();
-        let viewing = self.model.viewing_session_id.clone();
-        let live_id = self.model.session_id.clone();
+        let filter = self.model.task_filter.trim().to_lowercase();
+        let tasks: Vec<_> = self
+            .tasks
+            .iter()
+            .filter(|t| filter.is_empty() || t.title.to_lowercase().contains(&filter))
+            .cloned()
+            .collect();
+        let active_id = self.active_task_id.clone();
 
         egui::ScrollArea::vertical()
             .id_salt("task_list")
@@ -581,30 +773,32 @@ impl BonyBuildApp {
                     );
                 }
                 for task in &tasks {
-                    let selected = viewing
-                        .as_ref()
-                        .map(|v| v == &task.session_id)
-                        .unwrap_or_else(|| {
-                            viewing.is_none()
-                                && live_id.as_ref().is_some_and(|id| id == &task.session_id)
-                        });
-                    let fill = if selected { SELECTED } else { Color32::TRANSPARENT };
+                    let selected = active_id.as_ref() == Some(&task.id);
+                    let fill = if selected {
+                        SELECTED
+                    } else {
+                        Color32::TRANSPARENT
+                    };
                     let resp = Frame::new()
                         .fill(fill)
                         .corner_radius(CornerRadius::same(8))
                         .inner_margin(Margin::symmetric(10, 8))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.label(
-                                RichText::new(&task.title)
-                                    .size(13.0)
-                                    .color(if selected { TEXT } else { MUTED }),
-                            );
+                            ui.label(RichText::new(&task.title).size(13.0).color(if selected {
+                                TEXT
+                            } else {
+                                MUTED
+                            }));
                             ui.label(
                                 RichText::new(format!(
-                                    "{} 轮 · Σ {}",
-                                    task.turn_count,
-                                    format_tokens(task.total_tokens)
+                                    "{}{} · {}",
+                                    if task.isolated { "隔离" } else { "共享" },
+                                    task.branch
+                                        .as_deref()
+                                        .map(|b| format!(" · {b}"))
+                                        .unwrap_or_default(),
+                                    task.status.as_str()
                                 ))
                                 .size(11.0)
                                 .color(MUTED),
@@ -615,14 +809,36 @@ impl BonyBuildApp {
                     if resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
-                    if resp.clicked() {
-                        if live_id.as_ref() == Some(&task.session_id) && viewing.is_none() {
-                            self.model.go_chat();
-                        } else if live_id.as_ref() == Some(&task.session_id) {
-                            self.model.return_to_live();
-                        } else {
-                            self.model.load_task_view(&task.session_id);
+                    let mut archive = false;
+                    let mut delete = false;
+                    resp.context_menu(|ui| {
+                        if ui.button("归档任务").clicked() {
+                            archive = true;
+                            ui.close_menu();
                         }
+                        if ui.button("删除任务记录").clicked() {
+                            delete = true;
+                            ui.close_menu();
+                        }
+                    });
+                    if resp.clicked() {
+                        self.activate_task(ctx, task.clone());
+                    }
+                    if archive {
+                        if let Some(found) = self.tasks.iter_mut().find(|t| t.id == task.id) {
+                            found.status = TaskStatus::Archived;
+                            found.updated_at = unix_time();
+                            if let Some(repo) = &self.task_repo {
+                                let _ = repo.save(found);
+                            }
+                        }
+                        self.tasks.retain(|t| t.id != task.id);
+                    }
+                    if delete {
+                        if let Some(repo) = &self.task_repo {
+                            let _ = repo.delete(&task.id);
+                        }
+                        self.tasks.retain(|t| t.id != task.id);
                     }
                     ui.add_space(2.0);
                 }
@@ -659,12 +875,7 @@ impl BonyBuildApp {
 
     fn right_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("详情")
-                    .size(15.0)
-                    .strong()
-                    .color(TEXT),
-            );
+            ui.label(RichText::new("详情").size(15.0).strong().color(TEXT));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(
@@ -740,6 +951,82 @@ impl BonyBuildApp {
         {
             self.model.show_usage_detail = true;
         }
+
+        ui.add_space(18.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Changes ({})", self.changes.len()))
+                    .size(13.0)
+                    .strong()
+                    .color(TEXT),
+            );
+            if ui.small_button("刷新").clicked() {
+                match GitWorkspaceService::changes(&self.config.cwd) {
+                    Ok(v) => self.changes = v,
+                    Err(e) => self.task_error = Some(e),
+                }
+            }
+        });
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .id_salt("changes")
+            .max_height(220.0)
+            .show(ui, |ui| {
+                for change in self.changes.clone() {
+                    let mark = match change.kind {
+                        ChangeKind::Added => "A",
+                        ChangeKind::Modified => "M",
+                        ChangeKind::Deleted => "D",
+                        ChangeKind::Renamed => "R",
+                        ChangeKind::Untracked => "?",
+                        ChangeKind::Conflicted => "!",
+                    };
+                    let label = format!("{mark}  {}", change.path.display());
+                    if ui
+                        .selectable_label(
+                            self.selected_diff
+                                .as_ref()
+                                .is_some_and(|(p, _)| p == &change.path),
+                            label,
+                        )
+                        .clicked()
+                    {
+                        match GitWorkspaceService::diff(&self.config.cwd, Some(&change.path), false)
+                        {
+                            Ok(diff) => self.selected_diff = Some((change.path.clone(), diff)),
+                            Err(e) => self.task_error = Some(e),
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let action = if change.staged {
+                            "取消暂存"
+                        } else {
+                            "暂存"
+                        };
+                        if ui.small_button(action).clicked() {
+                            self.pending_git_action = Some((!change.staged, change.path.clone()));
+                        }
+                    });
+                }
+            });
+        if let Some((path, diff)) = &self.selected_diff {
+            ui.separator();
+            ui.label(
+                RichText::new(path.display().to_string())
+                    .size(12.0)
+                    .strong(),
+            );
+            egui::ScrollArea::both()
+                .id_salt("diff_preview")
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    ui.monospace(if diff.is_empty() {
+                        "未跟踪文件暂无 diff"
+                    } else {
+                        diff
+                    });
+                });
+        }
     }
 
     fn nav_placeholder(&mut self, ui: &mut egui::Ui) {
@@ -784,12 +1071,7 @@ impl BonyBuildApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.set_min_width(320.0);
-                ui.label(
-                    RichText::new("Bony Build")
-                        .size(18.0)
-                        .strong()
-                        .color(TEXT),
-                );
+                ui.label(RichText::new("Bony Build").size(18.0).strong().color(TEXT));
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new("原生桌面客户端 · ACP + Grok agent")
@@ -866,14 +1148,36 @@ impl BonyBuildApp {
                 }
 
                 ui.add_space(8.0);
+                if !self.attachments.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        for a in &self.attachments {
+                            ui.label(
+                                RichText::new(format!("📎 {}", a.name))
+                                    .size(11.5)
+                                    .color(MUTED),
+                            );
+                        }
+                        if ui.small_button("清除").clicked() {
+                            self.attachments.clear();
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("＋").size(16.0).color(MUTED));
+                    if ui
+                        .button(RichText::new("＋").size(16.0).color(MUTED))
+                        .on_hover_text("添加文件或图片")
+                        .clicked()
+                    {
+                        self.pick_attachments();
+                    }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let can_send = self.model.connected
                             && !self.model.busy
                             && !self.model.needs_login
-                            && !self.model.draft.trim().is_empty();
+                            && (!self.model.draft.trim().is_empty()
+                                || !self.attachments.is_empty());
                         if ui
                             .add_enabled(
                                 can_send,
@@ -908,6 +1212,28 @@ impl BonyBuildApp {
                         if soft_chip(ui, &usage_label, true) {
                             self.model.show_usage_detail = true;
                             self.model.show_user_menu = false;
+                        }
+                        ui.add_space(4.0);
+
+                        let mode_label = self
+                            .model
+                            .available_modes
+                            .iter()
+                            .find(|m| m.id == self.model.current_mode_id)
+                            .map(|m| m.name.as_str())
+                            .unwrap_or("执行模式");
+                        if !self.model.available_modes.is_empty()
+                            && soft_chip(ui, mode_label, self.model.connected && !self.model.busy)
+                        {
+                            let next = self
+                                .model
+                                .available_modes
+                                .iter()
+                                .find(|m| m.id != self.model.current_mode_id)
+                                .map(|m| m.id.clone());
+                            if let Some(mode_id) = next {
+                                self.send_cmd(UiCommand::SetMode { mode_id });
+                            }
                         }
                         ui.add_space(4.0);
 
@@ -976,7 +1302,8 @@ impl BonyBuildApp {
                 if menu_row(ui, "设置 · 编辑 config.toml", false) {
                     self.model.show_user_menu = false;
                     if let Err(e) = crate::config_io::open_config_in_editor() {
-                        self.model.apply(AgentEvent::Error(format!("无法打开配置: {e}")));
+                        self.model
+                            .apply(AgentEvent::Error(format!("无法打开配置: {e}")));
                     }
                 }
                 if self.model.needs_login {
@@ -998,6 +1325,62 @@ impl BonyBuildApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.model.show_user_menu = false;
         }
+    }
+
+    fn task_error_modal(&mut self, ctx: &egui::Context) {
+        let Some(message) = self.task_error.clone() else {
+            return;
+        };
+        egui::Window::new("操作未完成")
+            .collapsible(false)
+            .resizable(true)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(420.0);
+                ui.label(RichText::new(message).color(DANGER));
+                ui.add_space(12.0);
+                if ui.button("关闭").clicked() {
+                    self.task_error = None;
+                }
+            });
+    }
+
+    fn git_confirmation_modal(&mut self, ctx: &egui::Context) {
+        let Some((stage, path)) = self.pending_git_action.clone() else {
+            return;
+        };
+        egui::Window::new(if stage {
+            "确认暂存"
+        } else {
+            "确认取消暂存"
+        })
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(format!("将对 {} 执行显式 Git 写操作。", path.display()));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("取消").clicked() {
+                    self.pending_git_action = None;
+                }
+                if ui.button("确认").clicked() {
+                    let result = if stage {
+                        GitWorkspaceService::stage(&self.config.cwd, &path)
+                    } else {
+                        GitWorkspaceService::unstage(&self.config.cwd, &path)
+                    };
+                    match result {
+                        Ok(()) => {
+                            self.changes =
+                                GitWorkspaceService::changes(&self.config.cwd).unwrap_or_default()
+                        }
+                        Err(e) => self.task_error = Some(e),
+                    }
+                    self.pending_git_action = None;
+                }
+            });
+        });
     }
 
     /// Centered usage sheet: clean single card, tabs, no nested sidebar.
@@ -1087,9 +1470,7 @@ impl BonyBuildApp {
                 // Header
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("使用统计").size(18.0).strong().color(TEXT),
-                        );
+                        ui.label(RichText::new("使用统计").size(18.0).strong().color(TEXT));
                         ui.label(
                             RichText::new("折线 / 柱状统计 · 模型与轮次明细")
                                 .size(12.5)
@@ -1242,9 +1623,7 @@ impl BonyBuildApp {
                                                 );
                                                 if pct > 0.0 {
                                                     let mut fill = rect;
-                                                    fill.set_width(
-                                                        (rect.width() * pct).max(4.0),
-                                                    );
+                                                    fill.set_width((rect.width() * pct).max(4.0));
                                                     ui.painter().rect_filled(
                                                         fill,
                                                         CornerRadius::same(2),
@@ -1272,8 +1651,7 @@ impl BonyBuildApp {
                                     empty_hint(ui, "还没有对话轮次记录。");
                                 } else {
                                     for turn in &turns {
-                                        let expanded =
-                                            self.model.is_history_expanded(&turn.id);
+                                        let expanded = self.model.is_history_expanded(&turn.id);
                                         let model = if turn.model_name.is_empty() {
                                             turn.model_id.as_str()
                                         } else {
@@ -1382,9 +1760,8 @@ impl BonyBuildApp {
                                             .response
                                             .interact(egui::Sense::click());
                                         if resp.hovered() {
-                                            ui.ctx().set_cursor_icon(
-                                                egui::CursorIcon::PointingHand,
-                                            );
+                                            ui.ctx()
+                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
                                         }
                                         if resp.clicked() {
                                             self.model.toggle_history_expanded(&turn.id);
@@ -1500,10 +1877,8 @@ impl BonyBuildApp {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal_top(|ui| {
-                            let (bar, _) = ui.allocate_exact_size(
-                                Vec2::new(3.0, 28.0),
-                                egui::Sense::hover(),
-                            );
+                            let (bar, _) =
+                                ui.allocate_exact_size(Vec2::new(3.0, 28.0), egui::Sense::hover());
                             ui.painter()
                                 .rect_filled(bar, CornerRadius::same(2), ACCENT_BAR);
                             ui.add_space(10.0);
@@ -1688,7 +2063,10 @@ impl BonyBuildApp {
                                             }
                                         });
                                         ui.label(
-                                            RichText::new(&m.id).size(11.5).monospace().color(MUTED),
+                                            RichText::new(&m.id)
+                                                .size(11.5)
+                                                .monospace()
+                                                .color(MUTED),
                                         );
                                         if !m.description.is_empty() {
                                             ui.label(
@@ -1730,7 +2108,8 @@ impl BonyBuildApp {
                         .clicked()
                     {
                         if let Err(e) = crate::config_io::open_config_in_editor() {
-                            self.model.apply(AgentEvent::Error(format!("无法打开配置: {e}")));
+                            self.model
+                                .apply(AgentEvent::Error(format!("无法打开配置: {e}")));
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1804,34 +2183,33 @@ impl BonyBuildApp {
                     );
                 }
                 ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new("拒绝").color(TEXT))
-                                .fill(PANEL_2)
+                ui.horizontal_wrapped(|ui| {
+                    for opt in &perm.options {
+                        let allow = opt.kind.contains("Allow");
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(&opt.name).color(if allow {
+                                    BG
+                                } else {
+                                    TEXT
+                                }))
+                                .fill(if allow { ACCENT } else { PANEL_2 })
                                 .stroke(Stroke::new(1.0, BORDER))
                                 .corner_radius(CornerRadius::same(10))
-                                .min_size(Vec2::new(90.0, 34.0)),
-                        )
-                        .clicked()
-                    {
-                        self.model.pending_permission = None;
-                        self.send_cmd(UiCommand::PermissionResponse { allow: false });
-                        self.model.status = "Ready".into();
-                    }
-                    ui.add_space(8.0);
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new("批准").color(BG).strong())
-                                .fill(ACCENT)
-                                .corner_radius(CornerRadius::same(10))
                                 .min_size(Vec2::new(100.0, 34.0)),
-                        )
-                        .clicked()
-                    {
+                            )
+                            .clicked()
+                        {
+                            self.model.pending_permission = None;
+                            self.send_cmd(UiCommand::PermissionResponse {
+                                option_id: Some(opt.id.clone()),
+                            });
+                            self.model.status = if allow { "Working…" } else { "Ready" }.into();
+                        }
+                    }
+                    if ui.button("取消").clicked() {
                         self.model.pending_permission = None;
-                        self.send_cmd(UiCommand::PermissionResponse { allow: true });
-                        self.model.status = "Working…".into();
+                        self.send_cmd(UiCommand::PermissionResponse { option_id: None });
                     }
                 });
             });
@@ -1879,7 +2257,11 @@ fn stat_chip(ui: &mut egui::Ui, label: &str, value: &str) {
 }
 
 fn segment_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
-    let fill = if selected { SELECTED } else { Color32::TRANSPARENT };
+    let fill = if selected {
+        SELECTED
+    } else {
+        Color32::TRANSPARENT
+    };
     let stroke = if selected {
         Stroke::new(1.0, ACCENT_BAR)
     } else {
@@ -1938,35 +2320,51 @@ fn panel_toggle_btn(ui: &mut egui::Ui, side: PanelSide, tip: &str, active: bool)
         ui.painter()
             .rect_filled(rect, CornerRadius::same(6), SELECTED);
     }
-    let color = if active || resp.hovered() { TEXT } else { MUTED };
+    let color = if active || resp.hovered() {
+        TEXT
+    } else {
+        MUTED
+    };
     let stroke = Stroke::new(1.3, color);
     let outer = egui::Rect::from_center_size(rect.center(), Vec2::new(14.0, 11.0));
-    ui.painter()
-        .rect_stroke(outer, CornerRadius::same(1), stroke, egui::StrokeKind::Outside);
+    ui.painter().rect_stroke(
+        outer,
+        CornerRadius::same(1),
+        stroke,
+        egui::StrokeKind::Outside,
+    );
     match side {
         PanelSide::Left => {
             let x = outer.left() + 4.5;
             ui.painter().line_segment(
-                [egui::pos2(x, outer.top() + 1.0), egui::pos2(x, outer.bottom() - 1.0)],
+                [
+                    egui::pos2(x, outer.top() + 1.0),
+                    egui::pos2(x, outer.bottom() - 1.0),
+                ],
                 stroke,
             );
             let pane = egui::Rect::from_min_max(
                 egui::pos2(outer.left() + 1.0, outer.top() + 1.0),
                 egui::pos2(x, outer.bottom() - 1.0),
             );
-            ui.painter().rect_filled(pane, CornerRadius::ZERO, color.linear_multiply(0.35));
+            ui.painter()
+                .rect_filled(pane, CornerRadius::ZERO, color.linear_multiply(0.35));
         }
         PanelSide::Right => {
             let x = outer.right() - 4.5;
             ui.painter().line_segment(
-                [egui::pos2(x, outer.top() + 1.0), egui::pos2(x, outer.bottom() - 1.0)],
+                [
+                    egui::pos2(x, outer.top() + 1.0),
+                    egui::pos2(x, outer.bottom() - 1.0),
+                ],
                 stroke,
             );
             let pane = egui::Rect::from_min_max(
                 egui::pos2(x, outer.top() + 1.0),
                 egui::pos2(outer.right() - 1.0, outer.bottom() - 1.0),
             );
-            ui.painter().rect_filled(pane, CornerRadius::ZERO, color.linear_multiply(0.35));
+            ui.painter()
+                .rect_filled(pane, CornerRadius::ZERO, color.linear_multiply(0.35));
         }
     }
     resp.clicked()
@@ -2002,27 +2400,19 @@ fn nav_chevron_btn(ui: &mut egui::Ui, dir: NavDir, tip: &str, enabled: bool) -> 
             let tip = egui::pos2(c.x - half_len, c.y);
             let tail = egui::pos2(c.x + half_len, c.y);
             ui.painter().line_segment([tip, tail], stroke);
-            ui.painter().line_segment(
-                [egui::pos2(tip.x + head, tip.y - head), tip],
-                stroke,
-            );
-            ui.painter().line_segment(
-                [egui::pos2(tip.x + head, tip.y + head), tip],
-                stroke,
-            );
+            ui.painter()
+                .line_segment([egui::pos2(tip.x + head, tip.y - head), tip], stroke);
+            ui.painter()
+                .line_segment([egui::pos2(tip.x + head, tip.y + head), tip], stroke);
         }
         NavDir::Forward => {
             let tip = egui::pos2(c.x + half_len, c.y);
             let tail = egui::pos2(c.x - half_len, c.y);
             ui.painter().line_segment([tail, tip], stroke);
-            ui.painter().line_segment(
-                [egui::pos2(tip.x - head, tip.y - head), tip],
-                stroke,
-            );
-            ui.painter().line_segment(
-                [egui::pos2(tip.x - head, tip.y + head), tip],
-                stroke,
-            );
+            ui.painter()
+                .line_segment([egui::pos2(tip.x - head, tip.y - head), tip], stroke);
+            ui.painter()
+                .line_segment([egui::pos2(tip.x - head, tip.y + head), tip], stroke);
         }
     }
     enabled && resp.clicked()
@@ -2035,7 +2425,11 @@ fn search_icon_btn(ui: &mut egui::Ui, active: bool) -> bool {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(6), SELECTED);
     }
-    let color = if active || resp.hovered() { TEXT } else { MUTED };
+    let color = if active || resp.hovered() {
+        TEXT
+    } else {
+        MUTED
+    };
     let stroke = Stroke::new(1.4, color);
     let c = egui::pos2(rect.center().x - 1.2, rect.center().y - 1.2);
     let r = 5.2;
@@ -2073,8 +2467,7 @@ fn win_chrome_btn(ui: &mut egui::Ui, kind: WinChrome) -> bool {
         Color32::from_rgb(52, 52, 58)
     };
     if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::ZERO, hover_bg);
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, hover_bg);
     }
 
     let icon = if resp.hovered() && danger {
@@ -2098,7 +2491,8 @@ fn win_chrome_btn(ui: &mut egui::Ui, kind: WinChrome) -> bool {
         WinChrome::Maximize => {
             let half = 5.0;
             let r = egui::Rect::from_center_size(c, Vec2::splat(half * 2.0));
-            ui.painter().rect_stroke(r, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
+            ui.painter()
+                .rect_stroke(r, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
         }
         WinChrome::Restore => {
             let s = 4.2;
@@ -2112,8 +2506,7 @@ fn win_chrome_btn(ui: &mut egui::Ui, kind: WinChrome) -> bool {
             );
             ui.painter()
                 .rect_stroke(back, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
-            ui.painter()
-                .rect_filled(front, CornerRadius::ZERO, SIDEBAR);
+            ui.painter().rect_filled(front, CornerRadius::ZERO, SIDEBAR);
             ui.painter()
                 .rect_stroke(front, CornerRadius::ZERO, stroke, egui::StrokeKind::Outside);
         }
@@ -2140,7 +2533,11 @@ fn win_chrome_btn(ui: &mut egui::Ui, kind: WinChrome) -> bool {
 }
 
 fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
-    let fill = if selected { SELECTED } else { Color32::TRANSPARENT };
+    let fill = if selected {
+        SELECTED
+    } else {
+        Color32::TRANSPARENT
+    };
     let resp = Frame::new()
         .fill(fill)
         .corner_radius(CornerRadius::same(8))
@@ -2205,8 +2602,7 @@ fn menu_row(ui: &mut egui::Ui, label: &str, with_chevron: bool) -> bool {
 
 fn avatar_circle(ui: &mut egui::Ui, initials: &str) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::hover());
-    ui.painter()
-        .circle_filled(rect.center(), 14.0, AVATAR);
+    ui.painter().circle_filled(rect.center(), 14.0, AVATAR);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,

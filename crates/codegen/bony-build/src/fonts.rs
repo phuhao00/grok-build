@@ -23,7 +23,9 @@ pub fn install(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     let mut data = FontData::from_owned(bytes);
     data.index = index;
-    fonts.font_data.insert(name.to_owned(), std::sync::Arc::new(data));
+    fonts
+        .font_data
+        .insert(name.to_owned(), std::sync::Arc::new(data));
 
     // Highest priority for proportional so Han glyphs resolve (YaHei also covers Latin).
     if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {

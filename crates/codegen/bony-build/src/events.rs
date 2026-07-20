@@ -7,15 +7,32 @@ use crate::usage::TokenUsage;
 /// Commands sent from the UI thread to the agent bridge.
 #[derive(Debug)]
 pub enum UiCommand {
-    Prompt(String),
+    Prompt {
+        text: String,
+        attachments: Vec<AttachmentPayload>,
+    },
     Cancel,
-    /// `true` = allow once, `false` = deny / cancel.
-    PermissionResponse { allow: bool },
+    /// Exact ACP permission option selected by the user; `None` cancels.
+    PermissionResponse {
+        option_id: Option<String>,
+    },
     /// Run `grok login` (browser) then reconnect the agent.
     Login,
     /// Switch the active session model via ACP `session/set_model`.
-    SetModel { model_id: String },
+    SetModel {
+        model_id: String,
+    },
+    SetMode {
+        mode_id: String,
+    },
     Shutdown,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttachmentPayload {
+    pub name: String,
+    pub mime_type: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,22 +47,37 @@ pub struct ModelChoice {
 pub enum AgentEvent {
     Status(String),
     /// Need browser login before chatting.
-    NeedsLogin { message: String },
+    NeedsLogin {
+        message: String,
+    },
     Connected {
         session_id: String,
         cwd: PathBuf,
         current_model_id: String,
         current_model_name: String,
         models: Vec<ModelChoice>,
+        current_mode_id: String,
+        modes: Vec<ModeChoice>,
+        restored: bool,
     },
     Disconnected,
     ModelChanged {
         model_id: String,
         name: String,
     },
+    ModeChanged {
+        mode_id: String,
+    },
     AssistantDelta(String),
-    ToolStart { id: String, title: String },
-    ToolUpdate { id: String, status: String, detail: String },
+    ToolStart {
+        id: String,
+        title: String,
+    },
+    ToolUpdate {
+        id: String,
+        status: String,
+        detail: String,
+    },
     PermissionRequest {
         tool_call_id: String,
         title: String,
@@ -56,8 +88,18 @@ pub enum AgentEvent {
         usage: TokenUsage,
     },
     /// Context window snapshot (when the agent emits UsageUpdate).
-    ContextUsage { used: u64, size: u64 },
+    ContextUsage {
+        used: u64,
+        size: u64,
+    },
     Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ModeChoice {
+    pub id: String,
+    pub name: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone)]

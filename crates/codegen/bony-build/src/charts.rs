@@ -2,11 +2,11 @@
 
 use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 use egui_plot::{
-    uniform_grid_spacer, Bar, BarChart, GridMark, Line, MarkerShape, Plot, PlotBounds, PlotPoints,
-    Points,
+    Bar, BarChart, GridMark, Line, MarkerShape, Plot, PlotBounds, PlotPoints, Points,
+    uniform_grid_spacer,
 };
 
-use crate::usage::{format_tokens, ModelUsageSummary, TurnRecord};
+use crate::usage::{ModelUsageSummary, TurnRecord, format_tokens};
 
 const TEXT: Color32 = Color32::from_rgb(236, 236, 240);
 const MUTED: Color32 = Color32::from_rgb(148, 150, 160);
@@ -27,11 +27,7 @@ const BAR_COLORS: &[Color32] = &[
 ];
 
 /// Draw usage analytics with roomy axes and legends outside the plot canvas.
-pub fn draw_usage_charts(
-    ui: &mut egui::Ui,
-    turns: &[TurnRecord],
-    models: &[ModelUsageSummary],
-) {
+pub fn draw_usage_charts(ui: &mut egui::Ui, turns: &[TurnRecord], models: &[ModelUsageSummary]) {
     let chrono: Vec<&TurnRecord> = turns.iter().collect();
 
     if chrono.is_empty() {
@@ -64,75 +60,72 @@ pub fn draw_usage_charts(
     let y_cum = (cum_max as f64 * 1.12).max(10.0);
 
     // —— Per-turn lines ——
-    chart_card(ui, "每轮 Token", "横轴为轮次，纵轴为该轮消耗", |ui| {
-        external_legend(
-            ui,
-            &[
-                ("合计", LINE_TOTAL),
-                ("输入", LINE_IN),
-                ("输出", LINE_OUT),
-            ],
-        );
-        ui.add_space(8.0);
+    chart_card(
+        ui,
+        "每轮 Token",
+        "横轴为轮次，纵轴为该轮消耗",
+        |ui| {
+            external_legend(
+                ui,
+                &[("合计", LINE_TOTAL), ("输入", LINE_IN), ("输出", LINE_OUT)],
+            );
+            ui.add_space(8.0);
 
-        let totals: PlotPoints = chrono
-            .iter()
-            .enumerate()
-            .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.total_tokens as f64])
-            .collect();
-        let inputs: PlotPoints = chrono
-            .iter()
-            .enumerate()
-            .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.input_tokens as f64])
-            .collect();
-        let outputs: PlotPoints = chrono
-            .iter()
-            .enumerate()
-            .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.output_tokens as f64])
-            .collect();
-        let markers: PlotPoints = chrono
-            .iter()
-            .enumerate()
-            .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.total_tokens as f64])
-            .collect();
+            let totals: PlotPoints = chrono
+                .iter()
+                .enumerate()
+                .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.total_tokens as f64])
+                .collect();
+            let inputs: PlotPoints = chrono
+                .iter()
+                .enumerate()
+                .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.input_tokens as f64])
+                .collect();
+            let outputs: PlotPoints = chrono
+                .iter()
+                .enumerate()
+                .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.output_tokens as f64])
+                .collect();
+            let markers: PlotPoints = chrono
+                .iter()
+                .enumerate()
+                .map(|(i, t)| [i as f64 + 1.0, t.usage_delta.total_tokens as f64])
+                .collect();
 
-        let x_min = 0.5_f64;
-        let x_max = (n + 0.5).max(1.5);
+            let x_min = 0.5_f64;
+            let x_max = (n + 0.5).max(1.5);
 
-        base_plot("usage_per_turn", 188.0, y_turn)
-            .x_axis_formatter(turn_axis_fmt)
-            .y_axis_formatter(token_axis_fmt)
-            .label_formatter(|name, value| {
-                if name.is_empty() {
-                    format!("第 {} 轮 · {}", value.x.round() as i64, fmt_token(value.y))
-                } else {
-                    format!(
-                        "{name} · 第 {} 轮 · {}",
-                        value.x.round() as i64,
-                        fmt_token(value.y)
-                    )
-                }
-            })
-            .show(ui, |plot_ui| {
-                plot_ui.set_plot_bounds(PlotBounds::from_min_max([x_min, 0.0], [x_max, y_turn]));
-                // Names kept for hover only; legend is drawn outside.
-                plot_ui.line(
-                    Line::new(totals)
-                        .name("合计")
-                        .color(LINE_TOTAL)
-                        .width(2.0),
-                );
-                plot_ui.line(Line::new(inputs).name("输入").color(LINE_IN).width(1.5));
-                plot_ui.line(Line::new(outputs).name("输出").color(LINE_OUT).width(1.5));
-                plot_ui.points(
-                    Points::new(markers)
-                        .shape(MarkerShape::Circle)
-                        .radius(3.2)
-                        .filled(true)
-                        .color(LINE_TOTAL),
-                );
-            });
-    });
+            base_plot("usage_per_turn", 188.0, y_turn)
+                .x_axis_formatter(turn_axis_fmt)
+                .y_axis_formatter(token_axis_fmt)
+                .label_formatter(|name, value| {
+                    if name.is_empty() {
+                        format!("第 {} 轮 · {}", value.x.round() as i64, fmt_token(value.y))
+                    } else {
+                        format!(
+                            "{name} · 第 {} 轮 · {}",
+                            value.x.round() as i64,
+                            fmt_token(value.y)
+                        )
+                    }
+                })
+                .show(ui, |plot_ui| {
+                    plot_ui
+                        .set_plot_bounds(PlotBounds::from_min_max([x_min, 0.0], [x_max, y_turn]));
+                    // Names kept for hover only; legend is drawn outside.
+                    plot_ui.line(Line::new(totals).name("合计").color(LINE_TOTAL).width(2.0));
+                    plot_ui.line(Line::new(inputs).name("输入").color(LINE_IN).width(1.5));
+                    plot_ui.line(Line::new(outputs).name("输出").color(LINE_OUT).width(1.5));
+                    plot_ui.points(
+                        Points::new(markers)
+                            .shape(MarkerShape::Circle)
+                            .radius(3.2)
+                            .filled(true)
+                            .color(LINE_TOTAL),
+                    );
+                });
+        },
+    );
 
     ui.add_space(12.0);
 
@@ -181,7 +174,11 @@ pub fn draw_usage_charts(
     // —— Model bars ——
     chart_card(ui, "模型用量对比", "各模型合计 token", |ui| {
         if models.is_empty() {
-            ui.label(RichText::new("暂无按模型汇总的数据。").size(13.0).color(MUTED));
+            ui.label(
+                RichText::new("暂无按模型汇总的数据。")
+                    .size(13.0)
+                    .color(MUTED),
+            );
             return;
         }
 
@@ -215,11 +212,7 @@ pub fn draw_usage_charts(
             });
         ui.add_space(8.0);
 
-        let max_bar = models
-            .iter()
-            .map(|m| m.total_tokens)
-            .max()
-            .unwrap_or(0) as f64;
+        let max_bar = models.iter().map(|m| m.total_tokens).max().unwrap_or(0) as f64;
         let y_max = (max_bar * 1.2).max(10.0);
         let count = models.len() as f64;
         let bar_w = if count <= 1.0 { 0.45 } else { 0.62 };
@@ -279,12 +272,7 @@ pub fn draw_usage_charts(
     });
 }
 
-fn chart_card(
-    ui: &mut egui::Ui,
-    title: &str,
-    subtitle: &str,
-    add: impl FnOnce(&mut egui::Ui),
-) {
+fn chart_card(ui: &mut egui::Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut egui::Ui)) {
     Frame::new()
         .fill(CARD)
         .corner_radius(CornerRadius::same(12))

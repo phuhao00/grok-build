@@ -185,12 +185,7 @@ pub fn remember_project(projects: &mut Vec<PathBuf>, path: &Path) {
         save_recent_projects(projects);
         return;
     };
-    projects.retain(|p| {
-        p.canonicalize()
-            .map(|c| c != canonical)
-            .unwrap_or(true)
-            && p != path
-    });
+    projects.retain(|p| p.canonicalize().map(|c| c != canonical).unwrap_or(true) && p != path);
     projects.insert(0, canonical);
     if projects.len() > 12 {
         projects.truncate(12);
@@ -242,7 +237,9 @@ pub fn load_turns_from_path(path: &Path, limit: usize) -> Vec<TurnRecord> {
 ///
 /// Prefer nested `usage` (whole-prompt ledger). Fall back to sibling
 /// `inputTokens` / `outputTokens` / `totalTokens` (last-call / turn totals).
-pub fn parse_usage_from_meta(meta: Option<&serde_json::Map<String, serde_json::Value>>) -> TokenUsage {
+pub fn parse_usage_from_meta(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> TokenUsage {
     let Some(meta) = meta else {
         return TokenUsage::default();
     };
@@ -256,11 +253,7 @@ pub fn parse_usage_from_meta(meta: Option<&serde_json::Map<String, serde_json::V
             meta,
             &["reasoningTokens", "thoughtTokens", "reasoning_tokens"],
         ),
-        cached_read_tokens: pick_u64(
-            nested,
-            meta,
-            &["cachedReadTokens", "cached_read_tokens"],
-        ),
+        cached_read_tokens: pick_u64(nested, meta, &["cachedReadTokens", "cached_read_tokens"]),
         context_used: None,
         context_size: None,
     };
@@ -387,10 +380,8 @@ pub fn aggregate_model_usage(turns: &[TurnRecord]) -> Vec<ModelUsageSummary> {
             .saturating_add(turn.usage_delta.output_tokens);
     }
 
-    let mut models: Vec<ModelUsageSummary> = order
-        .into_iter()
-        .filter_map(|id| map.remove(&id))
-        .collect();
+    let mut models: Vec<ModelUsageSummary> =
+        order.into_iter().filter_map(|id| map.remove(&id)).collect();
     models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
     models
 }
@@ -425,10 +416,7 @@ pub fn aggregate_tasks(turns: &[TurnRecord]) -> Vec<TaskSummary> {
     }
 
     // Newest updated sessions first.
-    let mut tasks: Vec<TaskSummary> = order
-        .into_iter()
-        .filter_map(|id| map.remove(&id))
-        .collect();
+    let mut tasks: Vec<TaskSummary> = order.into_iter().filter_map(|id| map.remove(&id)).collect();
     tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     tasks
 }

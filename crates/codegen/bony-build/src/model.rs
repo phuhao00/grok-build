@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use crate::events::{AgentEvent, ModelChoice, PermissionOptionView};
+use crate::events::{AgentEvent, ModeChoice, ModelChoice, PermissionOptionView};
 use crate::usage::{
-    aggregate_tasks, load_recent_projects, load_recent_turns, remember_project, SessionUsageState,
-    TaskSummary, TokenUsage, TurnRecord,
+    SessionUsageState, TaskSummary, TokenUsage, TurnRecord, aggregate_tasks, load_recent_projects,
+    load_recent_turns, remember_project,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +105,8 @@ pub struct AppModel {
     pub current_model_name: String,
     pub available_models: Vec<ModelChoice>,
     pub show_model_picker: bool,
+    pub current_mode_id: String,
+    pub available_modes: Vec<ModeChoice>,
     pub show_user_menu: bool,
     pub show_usage_detail: bool,
     pub show_about: bool,
@@ -193,6 +195,9 @@ impl AppModel {
                 current_model_id,
                 current_model_name,
                 models,
+                current_mode_id,
+                modes,
+                restored: _,
             } => {
                 self.session_id = Some(session_id);
                 self.cwd = Some(cwd);
@@ -201,12 +206,18 @@ impl AppModel {
                 self.current_model_id = current_model_id;
                 self.current_model_name = current_model_name;
                 self.available_models = models;
+                self.current_mode_id = current_mode_id;
+                self.available_modes = modes;
                 self.status = "Ready".into();
             }
             AgentEvent::ModelChanged { model_id, name } => {
                 self.current_model_id = model_id;
                 self.current_model_name = name;
                 self.show_model_picker = false;
+                self.status = "Ready".into();
+            }
+            AgentEvent::ModeChanged { mode_id } => {
+                self.current_mode_id = mode_id;
                 self.status = "Ready".into();
             }
             AgentEvent::AssistantDelta(delta) => {
@@ -241,11 +252,7 @@ impl AppModel {
                     }));
                 }
             }
-            AgentEvent::ToolUpdate {
-                id,
-                status,
-                detail,
-            } => {
+            AgentEvent::ToolUpdate { id, status, detail } => {
                 self.ensure_live_view();
                 if let Some(card) = self.find_tool_mut(&id) {
                     if !status.is_empty() {
@@ -286,10 +293,7 @@ impl AppModel {
                 self.ensure_live_view();
                 self.busy = false;
                 self.status = "Ready".into();
-                let session_id = self
-                    .session_id
-                    .clone()
-                    .unwrap_or_else(|| "local".into());
+                let session_id = self.session_id.clone().unwrap_or_else(|| "local".into());
                 let assistant = self.last_assistant_text();
                 let tools = self.tools_since_last_user();
                 let record = self.usage.finish_turn(
@@ -301,9 +305,11 @@ impl AppModel {
                     tools,
                     usage,
                 );
-                if let Some(TimelineItem::Message(m)) = self.timeline.iter_mut().rev().find(|i| {
-                    matches!(i, TimelineItem::Message(m) if m.role == Role::Assistant)
-                }) {
+                if let Some(TimelineItem::Message(m)) =
+                    self.timeline.iter_mut().rev().find(
+                        |i| matches!(i, TimelineItem::Message(m) if m.role == Role::Assistant),
+                    )
+                {
                     m.turn_usage = Some(record.usage_delta.clone());
                 }
                 if self.task_title == "新任务" && !record.user_text.is_empty() {

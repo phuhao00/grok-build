@@ -14,19 +14,25 @@ path = "src/main.rs"
 agent-client-protocol = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 clap = { workspace = true }
 eframe = { version = "0.31", default-features = true }
 egui = "0.31"
 egui_plot = "0.31"
 futures = { workspace = true }
 rfd = "0.15"
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 xai-acp-lib = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

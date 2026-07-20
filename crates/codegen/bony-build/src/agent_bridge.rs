@@ -1,5 +1,7 @@
 //! Spawn `grok agent stdio` and bridge ACP to UI channels.
 
+use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -9,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use xai_acp_lib::LineBufferedRead;
 
-use crate::events::{AgentEvent, ModelChoice, PermissionOptionView, UiCommand};
+use crate::events::{AgentEvent, ModeChoice, ModelChoice, PermissionOptionView, UiCommand};
 use crate::usage::parse_usage_from_meta;
 
 #[derive(Clone)]
@@ -17,10 +19,11 @@ pub struct BridgeConfig {
     pub grok_bin: PathBuf,
     pub cwd: PathBuf,
     pub always_approve: bool,
+    pub resume_session_id: Option<String>,
 }
 
 struct PendingPermission {
-    respond: oneshot::Sender<bool>,
+    respond: oneshot::Sender<Option<String>>,
 }
 
 struct DesktopAcpClient {
@@ -28,6 +31,14 @@ struct DesktopAcpClient {
     pending: Arc<Mutex<Option<PendingPermission>>>,
     always_approve: bool,
     egui_ctx: egui::Context,
+    terminals: Arc<Mutex<HashMap<String, LocalTerminal>>>,
+}
+
+struct LocalTerminal {
+    child: std::process::Child,
+    output: Arc<Mutex<Vec<u8>>>,
+    output_byte_limit: usize,
+    exit_code: Option<u32>,
 }
 
 impl DesktopAcpClient {
@@ -84,27 +95,155 @@ impl acp::Client for DesktopAcpClient {
             options,
         });
 
-        let allow = rx.await.unwrap_or(false);
-        let outcome = if allow {
-            pick_allow(&args.options)
-                .or(args.options.first())
-                .map(|o| {
-                    acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(
-                        o.option_id.clone(),
-                    ))
-                })
-                .unwrap_or(acp::RequestPermissionOutcome::Cancelled)
-        } else {
-            pick_reject(&args.options)
-                .map(|o| {
-                    acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(
-                        o.option_id.clone(),
-                    ))
-                })
-                .unwrap_or(acp::RequestPermissionOutcome::Cancelled)
-        };
+        let selected = rx.await.unwrap_or(None);
+        let outcome = selected
+            .and_then(|id| {
+                args.options
+                    .iter()
+                    .find(|o| o.option_id.0.as_ref() == id)
+                    .map(|o| o.option_id.clone())
+            })
+            .map(|id| {
+                acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(id))
+            })
+            .unwrap_or(acp::RequestPermissionOutcome::Cancelled);
 
         Ok(acp::RequestPermissionResponse::new(outcome))
+    }
+
+    async fn create_terminal(
+        &self,
+        args: acp::CreateTerminalRequest,
+    ) -> acp::Result<acp::CreateTerminalResponse> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut command = std::process::Command::new(&args.command);
+        command
+            .args(&args.args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(cwd) = args.cwd {
+            command.current_dir(cwd);
+        }
+        for item in args.env {
+            command.env(item.name, item.value);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+        let output = Arc::new(Mutex::new(Vec::new()));
+        for mut reader in [
+            child
+                .stdout
+                .take()
+                .map(|v| Box::new(v) as Box<dyn Read + Send>),
+            child
+                .stderr
+                .take()
+                .map(|v| Box::new(v) as Box<dyn Read + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let target = output.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0_u8; 4096];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            if let Ok(mut out) = target.lock() {
+                                out.extend_from_slice(&buf[..n]);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        self.terminals.lock().unwrap().insert(
+            id.clone(),
+            LocalTerminal {
+                child,
+                output,
+                output_byte_limit: args.output_byte_limit.unwrap_or(1024 * 1024) as usize,
+                exit_code: None,
+            },
+        );
+        Ok(acp::CreateTerminalResponse::new(acp::TerminalId::new(id)))
+    }
+
+    async fn terminal_output(
+        &self,
+        args: acp::TerminalOutputRequest,
+    ) -> acp::Result<acp::TerminalOutputResponse> {
+        let mut terminals = self.terminals.lock().unwrap();
+        let terminal = terminals
+            .get_mut(args.terminal_id.0.as_ref())
+            .ok_or_else(|| acp::Error::invalid_params().data("unknown terminal"))?;
+        update_exit(terminal)?;
+        let bytes = terminal.output.lock().unwrap();
+        let truncated = bytes.len() > terminal.output_byte_limit;
+        let start = bytes.len().saturating_sub(terminal.output_byte_limit);
+        let output = String::from_utf8_lossy(&bytes[start..]).into_owned();
+        let mut response = acp::TerminalOutputResponse::new(output, truncated);
+        if let Some(code) = terminal.exit_code {
+            response = response.exit_status(acp::TerminalExitStatus::new().exit_code(code));
+        }
+        Ok(response)
+    }
+
+    async fn wait_for_terminal_exit(
+        &self,
+        args: acp::WaitForTerminalExitRequest,
+    ) -> acp::Result<acp::WaitForTerminalExitResponse> {
+        loop {
+            if let Some(code) = {
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
+                    .get_mut(args.terminal_id.0.as_ref())
+                    .ok_or_else(|| acp::Error::invalid_params().data("unknown terminal"))?;
+                update_exit(terminal)?;
+                terminal.exit_code
+            } {
+                return Ok(acp::WaitForTerminalExitResponse::new(
+                    acp::TerminalExitStatus::new().exit_code(code),
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+    }
+
+    async fn kill_terminal(
+        &self,
+        args: acp::KillTerminalRequest,
+    ) -> acp::Result<acp::KillTerminalResponse> {
+        if let Some(terminal) = self
+            .terminals
+            .lock()
+            .unwrap()
+            .get_mut(args.terminal_id.0.as_ref())
+        {
+            terminal
+                .child
+                .kill()
+                .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+        }
+        Ok(acp::KillTerminalResponse::new())
+    }
+
+    async fn release_terminal(
+        &self,
+        args: acp::ReleaseTerminalRequest,
+    ) -> acp::Result<acp::ReleaseTerminalResponse> {
+        if let Some(mut terminal) = self
+            .terminals
+            .lock()
+            .unwrap()
+            .remove(args.terminal_id.0.as_ref())
+        {
+            let _ = terminal.child.kill();
+            let _ = terminal.child.wait();
+        }
+        Ok(acp::ReleaseTerminalResponse::new())
     }
 
     async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
@@ -162,6 +301,18 @@ impl acp::Client for DesktopAcpClient {
     }
 }
 
+fn update_exit(terminal: &mut LocalTerminal) -> acp::Result<()> {
+    if terminal.exit_code.is_none()
+        && let Some(status) = terminal
+            .child
+            .try_wait()
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()))?
+    {
+        terminal.exit_code = Some(status.code().unwrap_or(1).max(0) as u32);
+    }
+    Ok(())
+}
+
 fn pick_allow(options: &[acp::PermissionOption]) -> Option<&acp::PermissionOption> {
     options
         .iter()
@@ -170,17 +321,6 @@ fn pick_allow(options: &[acp::PermissionOption]) -> Option<&acp::PermissionOptio
             options
                 .iter()
                 .find(|o| o.kind == acp::PermissionOptionKind::AllowAlways)
-        })
-}
-
-fn pick_reject(options: &[acp::PermissionOption]) -> Option<&acp::PermissionOption> {
-    options
-        .iter()
-        .find(|o| o.kind == acp::PermissionOptionKind::RejectOnce)
-        .or_else(|| {
-            options
-                .iter()
-                .find(|o| o.kind == acp::PermissionOptionKind::RejectAlways)
         })
 }
 
@@ -234,7 +374,7 @@ async fn run_bridge_loop(
                             run_grok_login(&config, &event_tx, &egui_ctx).await;
                             break;
                         }
-                        UiCommand::Prompt(_) => {
+                        UiCommand::Prompt { .. } => {
                             let _ = event_tx.send(AgentEvent::NeedsLogin {
                                 message: "Please sign in before chatting.".into(),
                             });
@@ -338,6 +478,7 @@ async fn run_session(
         pending: pending.clone(),
         always_approve: config.always_approve,
         egui_ctx: egui_ctx.clone(),
+        terminals: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let incoming = LineBufferedRead::spawn_local(incoming);
@@ -353,7 +494,7 @@ async fn run_session(
                 .client_capabilities(
                     acp::ClientCapabilities::new()
                         .fs(acp::FileSystemCapabilities::new())
-                        .terminal(false),
+                        .terminal(true),
                 )
                 .client_info(
                     acp::Implementation::new("bony-build", env!("CARGO_PKG_VERSION"))
@@ -372,7 +513,11 @@ async fn run_session(
     {
         Ok(r) => r,
         Err(e) => {
-            let tail = stderr_buf.lock().ok().map(|g| g.clone()).unwrap_or_default();
+            let tail = stderr_buf
+                .lock()
+                .ok()
+                .map(|g| g.clone())
+                .unwrap_or_default();
             let _ = child.kill().await;
             return SessionEnd::Fatal(format!("initialize failed: {e}\n{tail}"));
         }
@@ -416,7 +561,7 @@ async fn run_session(
                     run_grok_login(config, event_tx, egui_ctx).await;
                     return SessionEnd::Reconnect;
                 }
-                UiCommand::Prompt(_) => {
+                UiCommand::Prompt { .. } => {
                     emit(AgentEvent::NeedsLogin {
                         message: "Please sign in first, then send a message.".into(),
                     });
@@ -427,9 +572,7 @@ async fn run_session(
         return SessionEnd::Shutdown;
     }
 
-    if let Some(method) =
-        select_auth_method(&init.auth_methods, default_id.as_deref(), has_byok)
-    {
+    if let Some(method) = select_auth_method(&init.auth_methods, default_id.as_deref(), has_byok) {
         let id = method.id().0.to_string();
         // Don't force browser login when config.toml BYOK models are ready.
         let interactive = id == "grok.com" || id.contains("oidc");
@@ -454,7 +597,7 @@ async fn run_session(
                                 run_grok_login(config, event_tx, egui_ctx).await;
                                 return SessionEnd::Reconnect;
                             }
-                            UiCommand::Prompt(_) => {
+                            UiCommand::Prompt { .. } => {
                                 emit(AgentEvent::NeedsLogin {
                                     message: "Please sign in first.".into(),
                                 });
@@ -481,25 +624,58 @@ async fn run_session(
                 .cloned(),
         );
     }
-    let session = match conn.new_session(session_req).await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = child.kill().await;
-            return SessionEnd::Fatal(format!(
-                "session/new failed: {e}. Try Sign in again."
-            ));
-        }
-    };
-
-    let session_id = session.session_id.clone();
-    let (current_model_id, current_model_name, mut models) = extract_models(&session);
+    let restored = config.resume_session_id.is_some();
+    let (session_id, current_model_id, current_model_name, mut models, current_mode_id, modes) =
+        if let Some(saved_id) = config.resume_session_id.as_ref() {
+            match conn
+                .load_session(acp::LoadSessionRequest::new(
+                    acp::SessionId::new(saved_id.clone()),
+                    config.cwd.clone(),
+                ))
+                .await
+            {
+                Ok(s) => {
+                    let (model_id, model_name, models) =
+                        extract_model_state(s.models.as_ref(), &catalog);
+                    let (mode_id, modes) = extract_modes(s.modes.as_ref());
+                    (
+                        acp::SessionId::new(saved_id.clone()),
+                        model_id,
+                        model_name,
+                        models,
+                        mode_id,
+                        modes,
+                    )
+                }
+                Err(e) => {
+                    let _ = child.kill().await;
+                    return SessionEnd::Fatal(format!("session/load failed for {saved_id}: {e}"));
+                }
+            }
+        } else {
+            match conn.new_session(session_req).await {
+                Ok(s) => {
+                    let (model_id, model_name, models) = extract_models(&s);
+                    let (mode_id, modes) = extract_modes(s.modes.as_ref());
+                    (s.session_id, model_id, model_name, models, mode_id, modes)
+                }
+                Err(e) => {
+                    let _ = child.kill().await;
+                    return SessionEnd::Fatal(format!(
+                        "session/new failed: {e}. Try Sign in again."
+                    ));
+                }
+            }
+        };
     emit(AgentEvent::Connected {
         session_id: session_id.0.to_string(),
         cwd: config.cwd.clone(),
         current_model_id,
         current_model_name,
         models: models.clone(),
+        current_mode_id,
+        modes,
+        restored,
     });
 
     while let Some(cmd) = cmd_rx.recv().await {
@@ -546,27 +722,55 @@ async fn run_session(
                     }
                 }
             }
+            UiCommand::SetMode { mode_id } => {
+                match conn
+                    .set_session_mode(acp::SetSessionModeRequest::new(
+                        session_id.clone(),
+                        acp::SessionModeId::new(mode_id.clone()),
+                    ))
+                    .await
+                {
+                    Ok(_) => emit(AgentEvent::ModeChanged { mode_id }),
+                    Err(e) => emit(AgentEvent::Error(format!("切换模式失败: {e}"))),
+                }
+            }
             UiCommand::Cancel => {
                 let _ = conn
                     .cancel(acp::CancelNotification::new(session_id.clone()))
                     .await;
             }
-            UiCommand::PermissionResponse { allow } => {
+            UiCommand::PermissionResponse { option_id } => {
                 if let Some(pending) = pending.lock().unwrap().take() {
-                    let _ = pending.respond.send(allow);
+                    let _ = pending.respond.send(option_id);
                 }
             }
-            UiCommand::Prompt(text) => {
+            UiCommand::Prompt { text, attachments } => {
                 let text = text.trim().to_string();
-                if text.is_empty() {
+                if text.is_empty() && attachments.is_empty() {
                     continue;
+                }
+                let mut blocks = Vec::new();
+                if !text.is_empty() {
+                    blocks.push(acp::ContentBlock::Text(acp::TextContent::new(text)));
+                }
+                for attachment in attachments {
+                    if attachment.mime_type.starts_with("image/") {
+                        use base64::Engine as _;
+                        blocks.push(acp::ContentBlock::Image(acp::ImageContent::new(
+                            base64::engine::general_purpose::STANDARD.encode(attachment.data),
+                            attachment.mime_type,
+                        )));
+                    } else {
+                        let body = String::from_utf8_lossy(&attachment.data);
+                        blocks.push(acp::ContentBlock::Text(acp::TextContent::new(format!(
+                            "\n<attachment name=\"{}\">\n{}\n</attachment>",
+                            attachment.name, body
+                        ))));
+                    }
                 }
                 emit(AgentEvent::Status("Thinking…".into()));
                 match conn
-                    .prompt(acp::PromptRequest::new(
-                        session_id.clone(),
-                        vec![acp::ContentBlock::Text(acp::TextContent::new(text))],
-                    ))
+                    .prompt(acp::PromptRequest::new(session_id.clone(), blocks))
                     .await
                 {
                     Ok(resp) => {
@@ -609,9 +813,7 @@ async fn run_grok_login(
 
     let grok_bin = config.grok_bin.clone();
     let result = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&grok_bin)
-            .arg("login")
-            .status()
+        std::process::Command::new(&grok_bin).arg("login").status()
     })
     .await;
 
@@ -669,7 +871,17 @@ fn select_auth_method<'a>(
 }
 
 fn extract_models(session: &acp::NewSessionResponse) -> (String, String, Vec<ModelChoice>) {
-    if let Some(state) = session.models.as_ref() {
+    extract_model_state(
+        session.models.as_ref(),
+        &crate::config_io::load_models_catalog(),
+    )
+}
+
+fn extract_model_state(
+    state: Option<&acp::SessionModelState>,
+    catalog: &crate::config_io::ConfigModels,
+) -> (String, String, Vec<ModelChoice>) {
+    if let Some(state) = state {
         let models: Vec<ModelChoice> = state
             .available_models
             .iter()
@@ -687,7 +899,32 @@ fn extract_models(session: &acp::NewSessionResponse) -> (String, String, Vec<Mod
             .unwrap_or_else(|| current_id.clone());
         return (current_id, current_name, models);
     }
-    ("".into(), "未设置".into(), Vec::new())
+    let id = catalog.default_id.clone().unwrap_or_default();
+    let name = catalog
+        .models
+        .iter()
+        .find(|m| m.id == id)
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| "未设置".into());
+    (id, name, catalog.models.clone())
+}
+
+fn extract_modes(state: Option<&acp::SessionModeState>) -> (String, Vec<ModeChoice>) {
+    let Some(state) = state else {
+        return (String::new(), Vec::new());
+    };
+    (
+        state.current_mode_id.0.to_string(),
+        state
+            .available_modes
+            .iter()
+            .map(|m| ModeChoice {
+                id: m.id.0.to_string(),
+                name: m.name.clone(),
+                description: m.description.clone().unwrap_or_default(),
+            })
+            .collect(),
+    )
 }
 
 pub fn resolve_grok_bin(explicit: Option<&Path>) -> PathBuf {
