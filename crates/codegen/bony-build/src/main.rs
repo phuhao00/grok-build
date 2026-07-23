@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 //! Bony Build native desktop client (egui + ACP stdio).
 
 mod agent_bridge;
@@ -60,11 +62,15 @@ fn main() -> eframe::Result<()> {
         resume_session_id: None,
     };
 
+    let app_icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/bony-build.png"))
+        .expect("embedded Bony Build icon must be a valid PNG");
+
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size([1100.0, 720.0])
             .with_title("Bony Build")
+            .with_icon(app_icon)
             // Codex-style: single custom title bar (menus + window controls).
             .with_decorations(false),
         ..Default::default()
