@@ -24,14 +24,18 @@ jobs:
         include:
           - name: windows-x86_64
             os: windows-latest
+            target: x86_64-pc-windows-msvc
             artifact: bony-build.exe
             zip_suffix: windows-x86_64
           - name: macos-aarch64
             os: macos-14
+            target: aarch64-apple-darwin
             artifact: bony-build
             zip_suffix: macos-aarch64
+          # Cross-compile Intel Mac on macos-14 — macos-13 runners queue for a long time.
           - name: macos-x86_64
-            os: macos-13
+            os: macos-14
+            target: x86_64-apple-darwin
             artifact: bony-build
             zip_suffix: macos-x86_64
 
@@ -43,9 +47,10 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.92.0"
+          targets: ${{ matrix.target }}
 
       - name: Build bony-build (release-dist)
-        run: cargo build -p bony-build --profile release-dist
+        run: cargo build -p bony-build --profile release-dist --target ${{ matrix.target }}
 
       - name: Package zip (Windows)
         if: runner.os == 'Windows'
@@ -58,7 +63,7 @@ jobs:
           }
           $stage = "dist"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "target/release-dist/${{ matrix.artifact }}" $stage/
+          Copy-Item "target/${{ matrix.target }}/release-dist/${{ matrix.artifact }}" $stage/
           $zip = "bony-build-$tag-${{ matrix.zip_suffix }}.zip"
           Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
           echo "ASSET_PATH=$zip" >> $env:GITHUB_ENV
@@ -75,7 +80,7 @@ jobs:
           fi
           stage=dist
           mkdir -p "$stage"
-          cp "target/release-dist/${{ matrix.artifact }}" "$stage/"
+          cp "target/${{ matrix.target }}/release-dist/${{ matrix.artifact }}" "$stage/"
           chmod +x "$stage/${{ matrix.artifact }}"
           zip_name="bony-build-${TAG}-${{ matrix.zip_suffix }}.zip"
           (cd "$stage" && zip -9 "../${zip_name}" "${{ matrix.artifact }}")
@@ -90,6 +95,8 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          # Allow re-running the workflow to replace existing zip assets.
+          overwrite_files: true
           body: |
             Desktop client binaries for **Bony Build** `${{ env.RELEASE_TAG }}`.
 
