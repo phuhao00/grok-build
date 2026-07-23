@@ -2591,11 +2591,11 @@ impl BonyBuildApp {
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.set_min_width(320.0);
+                ui.set_min_width(440.0);
                 ui.label(RichText::new("Bony Build").size(18.0).strong().color(TEXT));
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("原生桌面客户端 · ACP + Grok agent")
+                    RichText::new("原生桌面 AI 编程助手 · 含 Unity CLI 本地控制")
                         .size(13.0)
                         .color(MUTED),
                 );
@@ -2603,6 +2603,40 @@ impl BonyBuildApp {
                 ui.label(
                     RichText::new(format!("版本 {}", env!("CARGO_PKG_VERSION")))
                         .size(12.5)
+                        .color(MUTED),
+                );
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new(
+                        "通过 ACP 驱动本地 grok agent，在仓库工作区里对话、改代码、跑工具。",
+                    )
+                    .size(12.5)
+                    .color(TEXT),
+                );
+                ui.add_space(10.0);
+                ui.label(RichText::new("Unity 控制（近期）").size(12.5).strong().color(TEXT));
+                ui.add_space(4.0);
+                for line in [
+                    "• 侧栏「Unity 控制」：安装 CLI / Pipeline、绑定工程、按钮操作",
+                    "• 聊天旁 Unity 芯片或 /unity：探测编辑器、Play、跑循环等",
+                    "• 走本机 Unity CLI，不经 Agent，避免 pipeline 安装卡死",
+                ] {
+                    ui.label(RichText::new(line).size(12.0).color(MUTED));
+                }
+                ui.add_space(10.0);
+                ui.label(RichText::new("其它能力").size(12.5).strong().color(TEXT));
+                ui.add_space(4.0);
+                for line in [
+                    "• 多供应商 BYOK（Qwen / Kimi / 智谱 / OpenAI 兼容等）",
+                    "• 项目与任务：可选隔离 Git worktree，按任务控制权限",
+                    "• 工具卡片、模型切换、使用量统计与中文界面",
+                ] {
+                    ui.label(RichText::new(line).size(12.0).color(MUTED));
+                }
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new("底层复用 SpaceXAI Grok agent；桌面壳为本产品。")
+                        .size(11.5)
                         .color(MUTED),
                 );
                 ui.add_space(14.0);

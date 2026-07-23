@@ -2,7 +2,7 @@
 
 **Bony Build** 桌面客户端 crate（eframe/egui + ACP stdio）。
 
-产品说明、截图与完整上手步骤见仓库根目录 [`README.md`](../../../README.md)。
+产品说明、截图与完整上手步骤见仓库根目录 [`README.md`](../../../README.md)（含 Unity、任务 / worktree、监控等介绍）。
 
 ## 运行
 

@@ -2,10 +2,11 @@
 
 # Bony Build
 
-**桌面端 AI 编程助手** — 在当前工作区探索代码、改文件、跑工具。
+**原生桌面 AI 编程助手** — 对话改代码、任务隔离 worktree、Unity CLI 本地控制。
 
 [快速开始](#快速开始) ·
 [功能](#功能) ·
+[Unity 控制](#unity-控制) ·
 [Web 监控](#web-监控) ·
 [模型与供应商](#模型与供应商) ·
 [架构](#架构) ·
@@ -19,13 +20,18 @@
 
 ## 这是什么
 
-**Bony Build** 是一个原生桌面客户端（Rust / egui），通过 [ACP](https://agentclientprotocol.com/) 驱动本地 `grok agent stdio` 运行时，在仓库工作区里完成对话式编程：
+**Bony Build** 是原生桌面客户端（Rust / egui）：通过 [ACP](https://agentclientprotocol.com/) 驱动本地 `grok agent stdio`，在你选定的仓库工作区里完成**对话式编程**——探索代码、改文件、跑终端与搜索工具，而不是只做一个聊天窗口。
 
-- 解释代码库结构、排查最近改动中的问题
-- 补测试、总结认证 / 架构等实现细节
-- 自动调用终端、文件编辑、搜索等工具（默认可自动批准）
+适合：
 
-底层复用 SpaceXAI Grok agent 运行时；产品品牌与桌面壳为 **Bony Build**。仓库：[`phuhao00/bony-build`](https://github.com/phuhao00/bony-build)。
+- 想在本机用 **多供应商 BYOK**（Qwen / Kimi / 智谱 / OpenAI 兼容等）做日常改码
+- 需要 **按任务隔离 Git worktree**，避免弄脏主工作区
+- 做 Unity 工程时，希望用 **本地 CLI 可视化闭环**（探测编辑器、Play、Pipeline），且不经 Agent 卡死安装流程
+- 想用本地 **Web 监控**看架构分层与每次提交对功能的影响
+
+常见用法：解释仓库结构、排查近期改动、补测试、总结认证 / 架构实现；Agent 会调用终端、文件编辑、搜索等工具。任务级权限支持只读 / 询问 / 允许编辑 / 完全控制；全局也可用 `--ask-permissions` 要求人工批准。
+
+底层复用 SpaceXAI Grok agent 运行时；**产品品牌与桌面壳为 Bony Build**。仓库：[`phuhao00/bony-build`](https://github.com/phuhao00/bony-build)。同一运行时也可走官方 `grok` TUI（见下方「也可使用终端 TUI」）。
 
 ---
 
@@ -33,20 +39,44 @@
 
 | 能力 | 说明 |
 |------|------|
-| 对话工作区 | 左对齐时间线、Markdown 渲染、用户气泡 / 助手卡片 |
-| 快速开始 | 一键发起常见任务（解释结构、找 bug、补测试、总结认证等） |
-| 模型切换 | 顶栏 / 输入区点击模型名，切换当前会话并写入默认配置 |
-| 多供应商 | Kimi / Qwen / 智谱 / OpenAI 兼容端 / Anthropic Messages 等 |
-| 工具与权限 | 内联工具卡片；可选人工批准（`--ask-permissions`） |
+| 对话工作区 | Codex 风格侧栏 + 时间线；Markdown、用户气泡 / 助手卡片、工具结果内联 |
+| 项目与任务 | 最近项目、新建 / 切换任务；可选隔离 worktree 与分支，状态可回看 |
+| 权限模式 | 任务级：只读 / 询问 / 允许编辑 / 完全控制；CLI 另支持 `--ask-permissions` |
+| 快速开始 | 一键常见任务（解释结构、找 bug、补测试、总结认证等） |
+| 模型切换 | 顶栏 / 输入区点模型名切换会话，并写入 `~/.grok/config.toml` 默认值 |
+| 多供应商 | Kimi / Qwen / 智谱 / OpenAI 兼容 / Anthropic Messages 等 BYOK |
+| Unity 控制 | 侧栏引导 + 聊天旁 `Unity` 芯片 / `/unity`；走本地 CLI，**不经 Agent** |
+| 使用统计 | 轮次与 Token 用量面板（折线 / 柱状） |
 | 中文界面 | 系统中文字体（如微软雅黑），避免乱码 |
 | 快捷键 | **Enter** 发送，**Shift+Enter** 换行 |
-| Web 监控 | 架构分层总览 + 每次提交的影响 / 改进 / 风险时间线 |
+| Web 监控 | 架构分层、「怎么工作」流程、功能影响矩阵与提交影响时间线 |
+
+侧栏另有部分入口（插件、站点、PR、定时等）仍为占位，后续迭代开放。
+
+---
+
+## Unity 控制
+
+两处入口：
+
+1. **侧栏「Unity 控制」** — 安装 CLI / Pipeline、绑定工程、按钮操作  
+2. **聊天输入旁的 `Unity` 按钮** — 打开对话控制芯片；也可直接发「探测编辑器」「进入 Play」或 `/unity`
+
+对话里的 Unity 操作走 **本机 Unity CLI**，不经过 grok Agent，避免在 worktree 里挂死 `unity pipeline install`。
+
+推荐步骤：安装 CLI → 重新检测 → 确认含 `Assets` 的工程根 → 安装 Pipeline → 打开编辑器后探测 → 跑闭环。Windows 默认 CLI：`%LOCALAPPDATA%\Unity\bin\unity.exe`。
+
+```powershell
+$env:UNITY_CLI_CHANNEL='beta'; irm https://public-cdn.cloud.unity3d.com/hub/prod/cli/install.ps1 | iex
+```
+
+更细说明见 [`crates/codegen/bony-build/README.md`](crates/codegen/bony-build/README.md)。
 
 ---
 
 ## Web 监控
 
-本地仪表盘，用于查看 **整体架构** 与 **每一次改动带来的影响**：
+本地仪表盘，用于查看 **整体架构**、端到端「怎么工作」，以及 **每一次改动带来的影响**：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run-monitor.ps1
@@ -57,9 +87,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-monitor.ps1
 
 - **功能影响矩阵**：对话、模型切换、登录认证、多供应商、工具执行、权限、会话 ACP、工作区、TUI、监控、文档等
 - **多维度评估**：用户体验 / 功能能力 / 安全 / 稳定性 / 兼容性 / 性能 / 开发体验 / 文档
+- **怎么工作**：分层与 turn 流程说明（配合架构图）
 - 每次提交的**用户影响说明** + **建议验证清单**
-- 架构分层、流程图与截图
 - 支持在 commit message 写 `Impact:` / `改进:` / `Risk:` / `风险:`
+- 目录热重载；可用 `scripts/sync-monitor-catalog.ps1` 同步能力目录
 
 实现：`crates/codegen/bony-monitor`（Axum）。
 
@@ -165,13 +196,15 @@ grok agent stdio  →  MvpAgent / SessionActor
         ├─ 采样（多 backend）
         ├─ 工具（终端 / 文件 / 搜索 …）
         └─ Workspace / MCP / 子 agent
+
+旁路：Unity CLI（本机进程，不经 ACP / Agent）
 ```
 
 - 桌面 crate：[`crates/codegen/bony-build`](crates/codegen/bony-build)
 - 详细分层与 turn 流程：[`ARCHITECTURE.md`](ARCHITECTURE.md)
 - 架构图：[`docs/architecture-layers.png`](docs/architecture-layers.png)、[`docs/architecture-turn-flow.png`](docs/architecture-turn-flow.png)
 
-桌面端**不**内嵌完整 agent 运行时，而是驱动已安装的 `grok` 子进程。
+桌面端**不**内嵌完整 agent 运行时，而是驱动已安装的 `grok` 子进程；Unity 控制则直接调本机 CLI。
 
 ---
 
@@ -185,6 +218,8 @@ grok agent stdio  →  MvpAgent / SessionActor
 | `crates/codegen/xai-grok-pager*` | 官方 TUI（`grok`） |
 | `crates/codegen/xai-grok-agent` / `*-tools` / `*-workspace` | Agent、工具、工作区 |
 | `scripts/run-desktop.ps1` | 桌面端一键构建运行 |
+| `scripts/run-monitor.ps1` | 启动 Web 监控（默认 :8787） |
+| `scripts/sync-monitor-catalog.ps1` | 同步监控能力目录 |
 | `scripts/run-dev.ps1` | TUI 开发启动 |
 | `docs/` | 截图与架构图 |
 
@@ -217,4 +252,4 @@ cargo run -p bony-build -- --cwd $PWD
 
 ## 致谢
 
-Agent 运行时与 `grok` CLI 能力来源于 [SpaceXAI / Grok Build](https://x.ai/cli) 生态。Bony Build 在其上提供多供应商桌面体验。
+Agent 运行时与 `grok` CLI 能力来源于 [SpaceXAI / Grok Build](https://x.ai/cli) 生态。Bony Build 在其上提供多供应商桌面体验、任务 / worktree 工作流，以及 Unity 本地控制与改动可观测。
