@@ -304,6 +304,25 @@ severity = "low"
 user_impact = "新用户能否快速理解并上手项目"
 
 [[features]]
+id = "unity-cli"
+name = "Unity CLI 可视化"
+category = "桌面体验"
+description = "侧栏 Unity CLI：Pipeline 安装、command/eval 探测、观察→行动→验证闭环与场景快照"
+user_facing = true
+paths = [
+  "crates/codegen/bony-build/src/unity.rs",
+  "crates/codegen/bony-build/src/app.rs",
+  "crates/codegen/bony-build/src/model.rs",
+]
+names = ["unity.rs"]
+keywords = [
+  "unity", "Unity CLI", "pipeline", "pipeline install", "eval", "Play Mode",
+  "观察", "行动", "验证", "MainNav::Unity", "unity_panel", "unity_pipeline_card",
+]
+severity = "medium"
+user_impact = "用户能否从桌面可视化驱动 Unity 编辑器并看懂 AI 闭环"
+
+[[features]]
 id = "build-ci"
 name = "构建 / 依赖"
 category = "工程"

@@ -514,6 +514,74 @@ fn scenes() -> Vec<WorkflowScene> {
                 ),
             ],
         },
+        WorkflowScene {
+            id: "unity".into(),
+            title: "分镜六 · Unity CLI 可视化闭环".into(),
+            summary: "桌面 Unity 页驱动独立 unity 二进制：观察编辑器 → command/eval 行动 → Play Mode 验证。"
+                .into(),
+            image: None,
+            image_caption: None,
+            image_side: "right".into(),
+            chart_ids: vec![],
+            steps: vec![
+                step(
+                    1,
+                    "观察",
+                    "检测 CLI / 安装 Pipeline",
+                    "UnityState",
+                    "侧栏进入 Unity CLI；安装 com.unity.pipeline，再拉 editors / pipeline list / 探测编辑器。",
+                    "unity pipeline install",
+                    &["bony-build"],
+                    &[
+                        cref(
+                            "crates/codegen/bony-build/src/unity.rs",
+                            "InstallPipeline / ProbeEditor",
+                            "Pipeline 安装与编辑器探测",
+                        ),
+                        cref(
+                            "crates/codegen/bony-build/src/app.rs",
+                            "unity_pipeline_card",
+                            "安装清单与可视化操作",
+                        ),
+                    ],
+                ),
+                step(
+                    2,
+                    "行动",
+                    "Pipeline command / eval",
+                    "com.unity.pipeline",
+                    "对已连接 Editor 跑注册命令或 Roslyn eval，毫秒级反馈，无需域重载。",
+                    "unity command eval \"…\"",
+                    &["bony-build"],
+                    &[
+                        cref(
+                            "crates/codegen/bony-build/src/unity.rs",
+                            "UnityAction::Eval",
+                            "封装 command eval",
+                        ),
+                        cref(
+                            "crates/codegen/bony-build/src/model.rs",
+                            "MainNav::Unity",
+                            "主导航入口",
+                        ),
+                    ],
+                ),
+                step(
+                    3,
+                    "验证",
+                    "Play Mode 确认",
+                    "操作时间线",
+                    "重进 Play Mode、记录 OK/ERR 与耗时；未安装 CLI 时走演示模式展示同一闭环。",
+                    "OpRecord timeline",
+                    &["bony-build"],
+                    &[cref(
+                        "crates/codegen/bony-build/src/app.rs",
+                        "unity_history_card",
+                        "操作时间线展示",
+                    )],
+                ),
+            ],
+        },
     ]
 }
 
@@ -870,6 +938,14 @@ fn curated_modules() -> Vec<CodeModule> {
             "Host",
             "用量折线 / 柱状图",
             &[],
+        ),
+        modu(
+            "crates/codegen/bony-build/src/unity.rs",
+            "unity",
+            "bony-build",
+            "Host",
+            "Unity CLI 探测、command/eval、观察→行动→验证闭环",
+            &["UnityState", "UnityAction", "LoopPhase"],
         ),
         modu(
             "crates/codegen/bony-build/src/markdown.rs",

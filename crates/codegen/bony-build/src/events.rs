@@ -11,7 +11,11 @@ pub enum UiCommand {
         text: String,
         attachments: Vec<AttachmentPayload>,
     },
+    /// Soft cancel of the in-flight turn (ACP `session/cancel`).
     Cancel,
+    /// Kill the agent subprocess and reconnect — used when soft cancel cannot
+    /// unblock a hung tool (e.g. missing `unity` hanging on Windows).
+    ForceStop,
     /// Exact ACP permission option selected by the user; `None` cancels.
     PermissionResponse {
         option_id: Option<String>,

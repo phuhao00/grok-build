@@ -37,6 +37,17 @@ impl TaskStatus {
             _ => Self::Draft,
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Draft => "草稿",
+            Self::Running => "运行中",
+            Self::WaitingApproval => "等待审批",
+            Self::Completed => "已完成",
+            Self::Failed => "失败",
+            Self::Archived => "已归档",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +55,7 @@ pub enum PermissionMode {
     ReadOnly,
     Ask,
     AllowEdits,
+    FullControl,
 }
 
 impl PermissionMode {
@@ -52,6 +64,7 @@ impl PermissionMode {
             Self::ReadOnly => "read_only",
             Self::Ask => "ask",
             Self::AllowEdits => "allow_edits",
+            Self::FullControl => "full_control",
         }
     }
 
@@ -59,6 +72,7 @@ impl PermissionMode {
         match value {
             "read_only" => Self::ReadOnly,
             "allow_edits" => Self::AllowEdits,
+            "full_control" => Self::FullControl,
             _ => Self::Ask,
         }
     }

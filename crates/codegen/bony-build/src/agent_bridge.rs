@@ -1,6 +1,6 @@
 //! Spawn `grok agent stdio` and bridge ACP to UI channels.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,7 @@ struct DesktopAcpClient {
     always_approve: bool,
     egui_ctx: egui::Context,
     terminals: Arc<Mutex<HashMap<String, LocalTerminal>>>,
+    seen_event_ids: Arc<Mutex<HashSet<String>>>,
 }
 
 struct LocalTerminal {
@@ -247,6 +248,18 @@ impl acp::Client for DesktopAcpClient {
     }
 
     async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
+        if let Some(event_id) = args
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("eventId"))
+            .and_then(|value| value.as_str())
+        {
+            let mut seen = self.seen_event_ids.lock().unwrap();
+            if !seen.insert(event_id.to_owned()) {
+                tracing::debug!(event_id, "dropping duplicate ACP session event");
+                return Ok(());
+            }
+        }
         match args.update {
             acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk { content, .. }) => {
                 if let acp::ContentBlock::Text(text) = content
@@ -479,6 +492,7 @@ async fn run_session(
         always_approve: config.always_approve,
         egui_ctx: egui_ctx.clone(),
         terminals: Arc::new(Mutex::new(HashMap::new())),
+        seen_event_ids: Arc::new(Mutex::new(HashSet::new())),
     };
 
     let incoming = LineBufferedRead::spawn_local(incoming);
@@ -739,6 +753,11 @@ async fn run_session(
                     .cancel(acp::CancelNotification::new(session_id.clone()))
                     .await;
             }
+            UiCommand::ForceStop => {
+                emit(AgentEvent::Status("强制停止 agent，正在重连…".into()));
+                let _ = child.kill().await;
+                return SessionEnd::Reconnect;
+            }
             UiCommand::PermissionResponse { option_id } => {
                 if let Some(pending) = pending.lock().unwrap().take() {
                     let _ = pending.respond.send(option_id);
@@ -769,10 +788,63 @@ async fn run_session(
                     }
                 }
                 emit(AgentEvent::Status("Thinking…".into()));
-                match conn
-                    .prompt(acp::PromptRequest::new(session_id.clone(), blocks))
-                    .await
-                {
+                let prompt_fut = conn.prompt(acp::PromptRequest::new(session_id.clone(), blocks));
+                tokio::pin!(prompt_fut);
+                // Keep draining UI commands while the turn runs — otherwise
+                // Cancel sits in the queue until the hung tool returns.
+                let turn_result = loop {
+                    tokio::select! {
+                        biased;
+                        cmd = cmd_rx.recv() => {
+                            match cmd {
+                                None => {
+                                    let _ = child.kill().await;
+                                    return SessionEnd::Shutdown;
+                                }
+                                Some(UiCommand::Cancel) => {
+                                    emit(AgentEvent::Status("正在停止…".into()));
+                                    let _ = conn
+                                        .cancel(acp::CancelNotification::new(session_id.clone()))
+                                        .await;
+                                }
+                                Some(UiCommand::ForceStop) => {
+                                    emit(AgentEvent::Status("强制停止 agent，正在重连…".into()));
+                                    let _ = child.kill().await;
+                                    return SessionEnd::Reconnect;
+                                }
+                                Some(UiCommand::Shutdown) => {
+                                    let _ = conn
+                                        .cancel(acp::CancelNotification::new(session_id.clone()))
+                                        .await;
+                                    let _ = child.kill().await;
+                                    return SessionEnd::Shutdown;
+                                }
+                                Some(UiCommand::PermissionResponse { option_id }) => {
+                                    if let Some(pending) = pending.lock().unwrap().take() {
+                                        let _ = pending.respond.send(option_id);
+                                    }
+                                }
+                                Some(UiCommand::Login) => {
+                                    emit(AgentEvent::Status(
+                                        "回合进行中，请先停止再登录".into(),
+                                    ));
+                                }
+                                Some(UiCommand::SetModel { .. } | UiCommand::SetMode { .. }) => {
+                                    emit(AgentEvent::Status(
+                                        "回合进行中，请先停止再切换".into(),
+                                    ));
+                                }
+                                Some(UiCommand::Prompt { .. }) => {
+                                    emit(AgentEvent::Status(
+                                        "回合进行中，请先停止再发送".into(),
+                                    ));
+                                }
+                            }
+                        }
+                        resp = &mut prompt_fut => break resp,
+                    }
+                };
+                match turn_result {
                     Ok(resp) => {
                         let usage = parse_usage_from_meta(resp.meta.as_ref());
                         emit(AgentEvent::TurnDone {

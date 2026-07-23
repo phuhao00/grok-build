@@ -58,6 +58,7 @@ pub enum UsageTab {
 pub enum MainNav {
     #[default]
     Chat,
+    Unity,
     Scheduled,
     Plugins,
     Sites,
@@ -68,6 +69,7 @@ impl MainNav {
     pub fn title(self) -> &'static str {
         match self {
             Self::Chat => "聊天",
+            Self::Unity => "Unity 控制",
             Self::Scheduled => "已安排",
             Self::Plugins => "插件",
             Self::Sites => "站点",
@@ -78,6 +80,7 @@ impl MainNav {
     pub fn placeholder_blurb(self) -> &'static str {
         match self {
             Self::Chat => "",
+            Self::Unity => "",
             Self::Scheduled => "定时任务与提醒将出现在这里。当前版本尚未接入调度能力。",
             Self::Plugins => "浏览并启用扩展插件。插件市场即将推出。",
             Self::Sites => "管理预览站点与部署入口。站点功能即将推出。",
@@ -203,6 +206,7 @@ impl AppModel {
                 self.cwd = Some(cwd);
                 self.connected = true;
                 self.needs_login = false;
+                self.busy = false;
                 self.current_model_id = current_model_id;
                 self.current_model_name = current_model_name;
                 self.available_models = models;
@@ -226,7 +230,7 @@ impl AppModel {
                 self.status = "Working…".into();
                 match self.timeline.last_mut() {
                     Some(TimelineItem::Message(m)) if m.role == Role::Assistant => {
-                        m.text.push_str(&delta);
+                        merge_stream_text(&mut m.text, &delta);
                     }
                     _ => self.timeline.push(TimelineItem::Message(ChatMessage {
                         role: Role::Assistant,
@@ -347,6 +351,31 @@ impl AppModel {
         }));
         self.busy = true;
         self.status = "Working…".into();
+    }
+
+    /// Complete an app-owned action without involving the ACP agent stream.
+    pub fn push_local_assistant(&mut self, text: String) {
+        self.ensure_live_view();
+        self.timeline.push(TimelineItem::Message(ChatMessage {
+            role: Role::Assistant,
+            text,
+            turn_usage: None,
+        }));
+        self.busy = false;
+        self.status = "Ready".into();
+        self.auto_scroll = true;
+    }
+
+    pub fn push_local_user(&mut self, text: String) {
+        self.ensure_live_view();
+        self.timeline.push(TimelineItem::Message(ChatMessage {
+            role: Role::User,
+            text,
+            turn_usage: None,
+        }));
+        self.busy = true;
+        self.status = "正在控制 Unity…".into();
+        self.auto_scroll = true;
     }
 
     /// Clear local chat and start a fresh task UI (same ACP session).
@@ -487,6 +516,21 @@ impl AppModel {
         String::new()
     }
 
+    pub fn latest_assistant_text(&self) -> String {
+        self.last_assistant_text()
+    }
+
+    pub fn replace_latest_assistant(&mut self, text: String) {
+        if let Some(TimelineItem::Message(message)) = self
+            .timeline
+            .iter_mut()
+            .rev()
+            .find(|item| matches!(item, TimelineItem::Message(m) if m.role == Role::Assistant))
+        {
+            message.text = text;
+        }
+    }
+
     fn tools_since_last_user(&self) -> Vec<String> {
         let mut titles = Vec::new();
         for item in self.timeline.iter().rev() {
@@ -528,6 +572,53 @@ impl AppModel {
 
     pub fn is_history_expanded(&self, id: &str) -> bool {
         self.history_expanded.iter().any(|x| x == id)
+    }
+}
+
+/// Merge an ACP text update defensively. Normal ACP updates are deltas, but a
+/// reconnecting or provider-specific bridge can re-deliver a long chunk or a
+/// cumulative snapshot. Avoid rendering either form as repeated paragraphs.
+fn merge_stream_text(current: &mut String, incoming: &str) {
+    if incoming.is_empty() {
+        return;
+    }
+    const LONG_CHUNK: usize = 32;
+    if incoming.len() >= LONG_CHUNK && current.ends_with(incoming) {
+        return;
+    }
+    if current.len() >= LONG_CHUNK && incoming.starts_with(current.as_str()) {
+        *current = incoming.to_owned();
+        return;
+    }
+    current.push_str(incoming);
+}
+
+#[cfg(test)]
+mod stream_merge_tests {
+    use super::merge_stream_text;
+
+    #[test]
+    fn keeps_normal_short_deltas() {
+        let mut text = "ha".to_string();
+        merge_stream_text(&mut text, "ha");
+        assert_eq!(text, "haha");
+    }
+
+    #[test]
+    fn drops_repeated_long_chunks() {
+        let chunk = "这是一段足够长的流式响应，用来验证同一个 ACP 消息块不会被重复渲染。";
+        let mut text = chunk.to_string();
+        merge_stream_text(&mut text, chunk);
+        assert_eq!(text, chunk);
+    }
+
+    #[test]
+    fn accepts_cumulative_snapshots_without_appending_them() {
+        let first = "This is a sufficiently long partial assistant response.";
+        let full = format!("{first} And this is the completed suffix.");
+        let mut text = first.to_string();
+        merge_stream_text(&mut text, &full);
+        assert_eq!(text, full);
     }
 }
 

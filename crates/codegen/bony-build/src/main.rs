@@ -10,6 +10,7 @@ mod git_workspace;
 mod markdown;
 mod model;
 mod task;
+mod unity;
 mod usage;
 
 use std::path::PathBuf;
